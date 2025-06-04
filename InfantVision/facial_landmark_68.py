@@ -16,8 +16,6 @@ from lib.config import config, update_config
 from lib.utils.transforms import crop
 from lib.core.evaluation import decode_preds
 from infant_face_orientation import FaceOrientationEstimator
-from infant_face_detector import InfantFaceDetector
-
 
 class FaceAlignmentProcessor:
     def __init__(self, config_path, model_path):
@@ -149,7 +147,8 @@ class FaceAlignmentProcessor:
     def process_video(self, video_path):
         """处理视频文件，保存处理后的视频和关键点JSON文件"""
         # 创建输出目录
-        output_dir = os.path.join(os.path.dirname(video_path), 'output')
+        # output_dir = os.path.join(os.path.dirname(video_path), 'face')
+        output_dir = os.path.join(os.path.dirname(os.path.dirname(video_path)), 'Face')
         os.makedirs(output_dir, exist_ok=True)
         
         # 设置输出文件路径
@@ -254,9 +253,8 @@ def main():
     # prefix = "/data/Leo/mm/data/raw_data/NanfangHospital/cry/zzy-baby-m/"
     # video_files = glob.glob(prefix + "*cam0.avi")
 
-    prefix = "/data/Leo/mm/data/raw_data/"
-    video_files = glob.glob(prefix + "**/*cam0.avi", recursive=True)
-    
+    prefix = '/data/Leo/mm/data/Newborn200/data/'
+    video_files = glob.glob(prefix + "*.mp4")
     for video_file in video_files:
         processor.process_video(video_file)
 

@@ -3,6 +3,7 @@ import numpy as np
 import json
 import os
 from datetime import timedelta
+import glob
 
 # 公共配置
 COMMON_CONFIG = {
@@ -16,22 +17,71 @@ COMMON_CONFIG = {
 FEATURE_CONFIG = {
     'mar': {
         'title': 'Mouth Aspect Ratio (MAR)',
-        'ylabel': 'MAR Value',
+        'ylabel': 'MAR',
         'color': 'b',
-        'legend': 'MAR'
+        'legend': 'MAR',
+        'linestyle': '-',
+        'grid': True,
     },
     'ear_left': {
         'title': 'Left Eye Aspect Ratio (EAR)',
-        'ylabel': 'EAR Value',
+        'ylabel': 'EAR',
         'color': 'g',
-        'legend': 'Left EAR'
+        'legend': 'Left EAR',
+        'linestyle': '-',
+        'grid': True,
     },
     'ear_right': {
         'title': 'Right Eye Aspect Ratio (EAR)',
-        'ylabel': 'EAR Value',
-        'color': 'r',
-        'legend': 'Right EAR'
-    }
+        'ylabel': 'EAR',
+        'color': 'orange',
+        'legend': 'Right EAR',
+        'linestyle': '-',
+        'grid': True,
+    },
+    
+    # 'Face':{
+    #     'title': 'Face Motion Intensity',
+    #     'ylabel': 'Intensity',
+    #     'color': 'r',
+    #     'legend': 'Face',
+    # },
+    # 'Left-arm': {
+    #     'title': 'Left Arm Motion Intensity',
+    #     'ylabel': 'Intensity',
+    #     'color': 'c',
+    #     'legend': 'Left Arm',
+    # },
+    # 'Right-arm': {
+    #     'title': 'Right Arm Motion Intensity',
+    #     'ylabel': 'Intensity',
+    #     'color': 'm',
+    #     'legend': 'Right Arm',
+    # },
+    # 'Left-leg': {
+    #     'title': 'Left Leg Motion Intensity',
+    #     'ylabel': 'Intensity',
+    #     'color': 'b',
+    #     'legend': 'Left Leg',
+    # },
+    # 'Right-leg': {
+    #     'title': 'Right Leg Motion Intensity',
+    #     'ylabel': 'Intensity',
+    #     'color': 'g',
+    #     'legend': 'Right Leg',
+    # },
+    # 'Torso-skin': {
+    #     'title': 'Torso Skin Motion Intensity',
+    #     'ylabel': 'Intensity',
+    #     'color': 'y',
+    #     'legend': 'Torso Skin',
+    # },
+    # 'WholeFrameMotion': {
+    #     'title': 'Whole Frame Motion Intensity',
+    #     'ylabel': 'Intensity',
+    #     'color': 'orange',
+    #     'legend': 'WholeFrameMotion',
+    # },
 }
 
 def sec_to_hms(seconds):
@@ -285,14 +335,55 @@ def visualize_features(features_json_path, output_img_path=None, features_to_plo
 # 使用示例
 if __name__ == "__main__":
     # 替换为您的实际路径
-    input_json = "face_landmarks_features.json"
-    output_img = "visualization_features.jpg"
+    # input_json = "face_landmarks_features.json"
+    # output_img = "img/visualization_features.jpg"
+    # ljh-baby-m zay-baby-f wqq-baby-f drz-m zzy-baby-m llj-baby-f
+    # prefix = "/data/Leo/mm/data/raw_data/NanfangHospital/cry/drz-m/features/"
+    # input_jsons = glob.glob(prefix + "*cam1_motion_features.json")
+
+    # prefix = "/data/Leo/mm/data/raw_data/"
+    # files = [
+    #     # "NanfangHospital/cry/drz-m",
+    #     # "ShenzhenUniversityGeneralHospital/non-cry/zlj-baby-f",
+    #     "NanfangHospital/cry/llj-baby-f",
+    #     # "NanfangHospital/non-cry/lyz-m",
+    # ]
+    # dirs = [prefix + file + "/features/*1_motion_features.json" for file in files]
+    # input_jsons = [glob.glob(d) for d in dirs]
+    # input_jsons = [item for sublist in input_jsons for item in sublist]
+
+    # prefix = '/data/Leo/mm/data/Newborn200'
+    # files = [
+    #     '/Cry/features/48cm2.66kg',
+    #     '/Cry/features/buduiqi_50cm3.4kg2',
+    #     '/NoCry/features/50cm3.18kg2'
+    # ]
+    # input_jsons = [prefix + file + '_motion_features.json' for file in files]
+
+    prefix = '/data/Leo/mm/data/Newborn200/'
+    files = [
+        "Cry/features/_49cm2.88kg_face_landmarks_features.json",
+    ]
+    input_jsons = [prefix + file for file in files]
     
+    for input_json in input_jsons:
+        print(f"\n处理文件: {input_json}")
+        # output_img = "img/" + input_json.split('/')[-1].replace('_motion_features.json', '') + "_visualization.jpg"
+        # label_path = input_json.replace('_motion_features.json', '.txt').replace('features', 'seg_result')
+        
+        output_img = 'image.png'
+        visualize_features(input_json, output_img)
+        # visualize_features(input_json, output_img, start_time="00:00:14", end_time="00:00:50")
+        # visualize_features(input_json, output_img, start_time="00:04:30", end_time="00:05:00")
+        # visualize_features(input_json, output_img, label_path=label_path)
+
+    
+
     # 示例1: 绘制指定时间段的所有特征和标签 (最常用)
     # visualize_features(input_json, output_img, start_time="00:01:16", end_time="00:01:32")
     
     # 示例2: 自动绘制完整视频的所有特征和标签 (次常用)
-    visualize_features(input_json, output_img)
+    # visualize_features(input_json, output_img)
     
     # 示例3: 手动指定标签路径 (备用)
     # visualize_features(input_json, output_img, label_path="custom_labels.txt")
