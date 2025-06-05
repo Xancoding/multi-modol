@@ -20,8 +20,7 @@ from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 
 # Local imports
-from Preprocessing import NICUWav2Segments
-from Feature_Extraction_Audio import acoustic_features_and_spectrogram
+from Feature_Extraction_Audio import acoustic_features_and_spectrogram, NICUWav2Segments
 from Feature_Extraction_Body import body_features
 from Feature_Extraction_Face import facial_features
 import config

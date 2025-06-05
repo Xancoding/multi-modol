@@ -60,6 +60,7 @@ def load_and_validate_json(input_path: str) -> dict:
     with open(input_path) as f:
         return json.load(f)
 
+
 def get_valid_time_range(label_path: str) -> Tuple[float, float]:
     """从标签文件中获取有效时间范围"""
     min_start_time, max_end_time = float('inf'), 0.0

@@ -12,6 +12,10 @@ from scipy.fftpack.realtransforms import dct
 from tqdm import tqdm
 import config
 import pickle
+import os
+import librosa
+import utils
+from typing import List, Tuple
 
 
 eps = sys.float_info.epsilon
@@ -662,14 +666,44 @@ def feature_extraction(signal, sampling_rate, window, step, deltas=True):
     return features, feature_names
 
 
-
-
 def Data_Acq(fileName):
     file = open(fileName, 'rb')
     sample = pickle.load(file, encoding='latin1')
     file.close()
 
     return sample
+
+
+def NICUWav2Segments(dataDir, labelDir):
+    # Load and preprocess audio
+    raw_audio, sr = librosa.load(dataDir, sr=config.audioSampleRate)
+    min_t, max_t = utils.get_valid_time_range(labelDir)
+    raw_audio = utils.crop_data_by_time(raw_audio, sr, min_t, max_t)
+
+    # Process cry segments (vectorized)
+    cry_ranges = []
+    if os.path.exists(labelDir):
+        with open(labelDir) as f:
+            for line in filter(None, map(str.strip, f)):
+                parts = line.replace('\t', ' ').split()
+                if len(parts) == 3 and int(parts[2]) == 1:
+                    start, end = (int((float(t)-min_t)*sr) for t in parts[:2])
+                    cry_ranges.append((start, end))
+
+    # Generate valid window indices (discard incomplete segments)
+    win_size, step_size = utils.calculate_window_params(sr, config.slidingWindows, config.step)
+    valid_indices = np.arange(0, len(raw_audio) - win_size + 1, step_size)
+    
+    # Vectorized window extraction (automatically discards incomplete segments)
+    windows = np.stack([raw_audio[i:i+win_size] for i in valid_indices])
+    
+    # Vectorized label generation
+    cry_mask = np.zeros(len(raw_audio), dtype=bool)
+    for start, end in cry_ranges:
+        cry_mask[start:end] = True
+    labels = np.array([cry_mask[i:i+win_size].any() for i in valid_indices], dtype=int)
+
+    return {"data": windows, "label": labels}
 
 
 def acoustic_features_and_spectrogram(audioData):
