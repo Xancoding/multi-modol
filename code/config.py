@@ -2,6 +2,8 @@ n_splits = 10
 seed = 42
 # Set data
 audioSampleRate = 16000
+# slidingWindows = 2.5
+# step = 1.5
 slidingWindows = 2.5
 step = 2.5
 

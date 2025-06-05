@@ -1,6 +1,5 @@
 import numpy as np
-import json
-from scipy import stats
+import utils
 from typing import List, Dict, Tuple, Callable
 import warnings
 
@@ -54,48 +53,20 @@ def get_feature_calculators(fps: int) -> List[Tuple[str, Callable]]:
     ]
 
 def body_features(input_path: str, window_size_sec: float, step_size_sec: float, label_path: str) -> Tuple[np.ndarray, List[str], List[Dict]]:
-    """
-    从输入文件中提取运动特征（多维度优化版）
-    
-    参数:
-        input_path: 输入JSON文件路径
-        window_size_sec: 分析窗口大小(秒)
-        step_size_sec: 滑动步长(秒)
-        label_path: 标签文件路径
-        
-    返回:
-        features_array: 特征矩阵 (n_windows, n_features)
-        feature_names: 特征名称列表
-        window_metadata: 窗口元数据列表
-    """
-    # 加载运动特征数据
-    with open(input_path) as f:
-        data = json.load(f)
-    
+    """从输入文件中提取运动特征"""
+    # 加载数据
+    data = utils.load_and_validate_json(input_path)
     features = data['features']
     fps = data['video_info']['fps']
     
-    # 读取标签文件，计算有效时间范围
-    min_start_time = float('inf')
-    max_end_time = 0.0
-    with open(label_path, 'r') as f:
-        for line in f:
-            parts = line.strip().split('\t')
-            if len(parts) >= 2:
-                lStart, lEnd = float(parts[0]), float(parts[1])
-                min_start_time = min(min_start_time, lStart)
-                max_end_time = max(max_end_time, lEnd)
+    # 获取有效时间范围
+    min_start_time, max_end_time = utils.get_valid_time_range(label_path)
+    features = utils.crop_data_by_time(features, fps, min_start_time, max_end_time)
     
-    # 转换为帧索引并裁剪特征数据
-    min_start_frame = int(min_start_time * fps)
-    max_end_frame = int(max_end_time * fps)
-    features = features[min_start_frame:max_end_frame]
+    # 计算窗口参数
+    window_size_frames, step_size_frames = utils.calculate_window_params(fps, window_size_sec, step_size_sec)
     
-    # 窗口和步长的帧数
-    window_size_frames = int(round(window_size_sec * fps))
-    step_size_frames = int(round(step_size_sec * fps))
-    
-    # 获取特征计算器和特征名称
+    # 获取特征计算器
     feature_calculators = get_feature_calculators(fps)
     feature_keys = ['Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg']
     feature_names = [
@@ -105,25 +76,21 @@ def body_features(input_path: str, window_size_sec: float, step_size_sec: float,
     
     # 初始化输出
     n_windows = len(range(0, len(features), step_size_frames))
-    n_features = len(feature_names)
-    features_array = np.zeros((n_windows, n_features))
+    features_array = np.zeros((n_windows, len(feature_names)))
     window_metadata = []
     
     for i, start_idx in enumerate(range(0, len(features), step_size_frames)):
         end_idx = min(start_idx + window_size_frames, len(features))
+        
+        # 记录元数据
+        window_metadata.append(utils.create_window_metadata(
+            min_start_time * fps + start_idx,
+            min_start_time * fps + end_idx,
+            fps
+        ))
+        
+        # 计算特征
         window_data = features[start_idx:end_idx]
-        
-        # 记录窗口元数据
-        start_frame_original = min_start_frame + start_idx
-        end_frame_original = min_start_frame + end_idx - 1
-        window_metadata.append({
-            'start_frame': start_frame_original,
-            'end_frame': end_frame_original,
-            'start_sec': start_frame_original / fps,
-            'end_sec': end_frame_original / fps,
-        })
-        
-        # 计算每个部位的特征
         feature_values = []
         for key in feature_keys:
             motion = extract_motion_components(window_data, key)
@@ -132,19 +99,20 @@ def body_features(input_path: str, window_size_sec: float, step_size_sec: float,
         
         features_array[i, :] = feature_values
     
-    return features_array, feature_names
+    return features_array, feature_names, window_metadata
 
 # ================== 使用示例 ==================
 if __name__ == "__main__":
     # 示例参数
     prefix = '/data/Leo/mm/data/Newborn200/'
-    input_json = prefix + "NoCry/body/50cm3.24kg_motion_features.json"
-    label_file = prefix + "NoCry/Label/50cm3.24kg.txt"
+    input_json = prefix + "Body/50cm3.24kg_motion_features.json"
+    label_file = prefix + "Label/50cm3.24kg.txt"
     window_size = 2.5  # 2.5秒窗口大小
     step_size = 2.5    # 1.5秒步长
     
     # 提取特征
-    features, feature_names = body_features(input_json, window_size, step_size, label_file)
+    features, feature_names, meta = body_features(input_json, window_size, step_size, label_file)
     
     print(f"特征矩阵形状: {features.shape}")
     print(f"前5个特征名称: {feature_names[:5]}")
+    print(f"前5个窗口元数据: {meta[:5]}")  # 打印前5个窗口的元数据

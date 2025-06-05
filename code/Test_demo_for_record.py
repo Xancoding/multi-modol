@@ -1,12 +1,10 @@
 # Standard library imports
 import os
 import glob
-import random
 
 # Third-party imports
 import numpy as np
 import pandas as pd
-import torch
 from tqdm import tqdm
 
 # Scikit-learn imports
@@ -21,77 +19,99 @@ from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 
-
 # Local imports
 from Preprocessing import NICUWav2Segments
 from Feature_Extraction_Audio import acoustic_features_and_spectrogram
 from Feature_Extraction_Body import body_features
 from Feature_Extraction_Face import facial_features
 import config
+import utils
 
 # 全局时间映射表
 TIME_MAPPING = None
 
-def getLabelDir(dataDir):
-    base_name = os.path.splitext(os.path.basename(dataDir))[0]
-    parent_dir = os.path.dirname(dataDir)
-    new_parent = os.path.join(os.path.dirname(parent_dir), "Label")
-    os.makedirs(new_parent, exist_ok=True)
-    labelDir = os.path.join(new_parent, f"{base_name}.txt")
-    return labelDir
+# ====================== 提取的独立函数 ======================
 
-def getMotionFile(dataDir):
-    base_name = os.path.splitext(os.path.basename(dataDir))[0]
-    parent_dir = os.path.dirname(dataDir)
-    new_parent = os.path.join(os.path.dirname(parent_dir), "Body")
-    os.makedirs(new_parent, exist_ok=True)
-    file = os.path.join(new_parent, f"{base_name}_motion_features.json")
-    return file
+def create_classifier(model_type, random_state=None):
+    """创建指定类型的分类器"""
+    if model_type == 'svm':
+        return SVC(kernel='rbf', C=1.0, gamma='scale', class_weight='balanced', random_state=random_state, probability=True)
+    elif model_type == 'fnn':
+        return MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=random_state)
+    elif model_type == 'knn':
+        return KNeighborsClassifier(n_neighbors=5, weights='distance', metric='euclidean')
+    elif model_type == 'rf':
+        return RandomForestClassifier(n_estimators=100, random_state=random_state, class_weight='balanced')
+    elif model_type == 'xgb':
+        return XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', random_state=random_state, scale_pos_weight=1)
+    elif model_type == 'lgbm':
+        return LGBMClassifier(random_state=random_state, class_weight='balanced', n_estimators=100, verbosity=-1)
+    raise ValueError(f"未知的模型类型: {model_type}")
 
-def getFaceFile(dataDir):
-    base_name = os.path.splitext(os.path.basename(dataDir))[0]
-    parent_dir = os.path.dirname(dataDir)
-    new_parent = os.path.join(os.path.dirname(parent_dir), "Face")
-    os.makedirs(new_parent, exist_ok=True)
-    file = os.path.join(new_parent, f"{base_name}_face_landmarks.json")
-    return file
+def standardize_features(X_train, X_test=None):
+    """标准化特征数据"""
+    scaler = StandardScaler().fit(X_train)
+    if X_test is not None:
+        return scaler.transform(X_train), scaler.transform(X_test)
+    return scaler.transform(X_train)
 
-def get_audio_features(dataDir):
-    labelDir = getLabelDir(dataDir)
+def calculate_classification_metrics(y_true, y_pred):
+    """计算分类评估指标"""
+    report = classification_report(y_true, y_pred, output_dict=True)
+    return {
+        'accuracy': report['accuracy'],
+        'precision': report['weighted avg']['precision'],
+        'recall': report['weighted avg']['recall'],
+        'f1-score': report['weighted avg']['f1-score']
+    }
+
+def record_misclassified_samples(y_true, y_pred, subject_ids, original_indices, fold):
+    """记录错误分类的样本"""
+    misclassified = []
+    for i in range(len(y_true)):
+        if y_true[i] != y_pred[i]:
+            misclassified.append({
+                'subject_id': subject_ids[i],
+                'original_index': original_indices[i],
+                'true_label': y_true[i],
+                'predicted_label': y_pred[i],
+                'fold': fold
+            })
+    return misclassified
+
+def create_multimodal_classifiers(model_type):
+    """创建多模态分类器"""
+    return {
+        'audio': create_classifier(model_type),
+        'motion': create_classifier(model_type),
+        'face': create_classifier(model_type)
+    }
+
+# ====================== 主功能函数 ======================
+
+def extract_audio_features(dataDir):
+    """提取音频特征"""
+    labelDir = utils.get_label_file_path(dataDir)
     sample = NICUWav2Segments(dataDir, labelDir)
     acoustic_feature, feature_names = acoustic_features_and_spectrogram(sample["data"])
     return acoustic_feature, sample["label"]
 
-def get_body_features(dataDir):
-    file = getMotionFile(dataDir)
-    labelDir = getLabelDir(dataDir)
-    motion_feature, feature_names = body_features(file, config.slidingWindows, config.step, labelDir)
+def extract_body_motion_features(dataDir):
+    """提取身体运动特征"""
+    file = utils.get_motion_feature_file_path(dataDir)
+    labelDir = utils.get_label_file_path(dataDir)
+    motion_feature, feature_names, _ = body_features(file, config.slidingWindows, config.step, labelDir)
     return motion_feature
 
-def get_face_features(dataDir):
-    file = getFaceFile(dataDir)
-    labelDir = getLabelDir(dataDir)
-    facial_feature, feature_names = facial_features(file, config.slidingWindows, config.step, labelDir)
+def extract_facial_features(dataDir):
+    """提取面部特征"""
+    file = utils.get_face_landmark_file_path(dataDir)
+    labelDir = utils.get_label_file_path(dataDir)
+    facial_feature, feature_names, _ = facial_features(file, config.slidingWindows, config.step, labelDir)
     return facial_feature
 
-def set_seed(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    try:
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
-    except ImportError:
-        pass
-
-def get_feature_filename(label_path):
-    basename = os.path.splitext(os.path.basename(label_path))[0]
-    return f"{basename}_features.npz"
-
-def load_or_create_features(wav_files):
+def load_or_extract_features(wav_files):
+    """加载或提取特征数据"""
     feature_dir = '/data/Leo/mm/data/Newborn200/Features'
     os.makedirs(feature_dir, exist_ok=True)
     subject_data = {}
@@ -99,14 +119,14 @@ def load_or_create_features(wav_files):
     
     print("\n正在加载/生成特征数据...")
     for file in tqdm(wav_files, desc="处理文件中"):
-        label_path = getLabelDir(file)
-        feature_file = get_feature_filename(label_path)
+        label_path = utils.get_label_file_path(file)
+        feature_file = utils.generate_feature_filename(label_path)
         feature_path = os.path.join(feature_dir, feature_file)
         
         if feature_file in existing_files:
             try:
                 data = np.load(feature_path)
-                subject_id = get_subject_id(file)
+                subject_id = utils.extract_subject_id(file)
                 if subject_id not in subject_data:
                     subject_data[subject_id] = []
                 subject_data[subject_id].append({
@@ -119,10 +139,10 @@ def load_or_create_features(wav_files):
             except Exception as e:
                 print(f"\n加载特征文件 {feature_file} 失败，将重新生成: {str(e)}")
         
-        subject_id = get_subject_id(file)
-        acoustic_feat, label = get_audio_features(file)
-        motion_feat = get_body_features(file)
-        face_feat = get_face_features(file)
+        subject_id = utils.extract_subject_id(file)
+        acoustic_feat, label = extract_audio_features(file)
+        motion_feat = extract_body_motion_features(file)
+        face_feat = extract_facial_features(file)
 
         # 检查特征维度是否一致
         if len(acoustic_feat) != len(motion_feat) or len(acoustic_feat) != len(face_feat):
@@ -131,13 +151,7 @@ def load_or_create_features(wav_files):
             print(f"运动特征维度: {len(motion_feat)}")
             print(f"面部特征维度: {len(face_feat)}")
             print(f"标签长度: {len(label)}")
-            
-            # 取最小长度
-            min_len = min(len(acoustic_feat), len(motion_feat), len(face_feat), len(label))
-            acoustic_feat = acoustic_feat[:min_len]
-            motion_feat = motion_feat[:min_len]
-            face_feat = face_feat[:min_len]
-            label = label[:min_len]
+            continue
 
         sample = {
             'acoustic': acoustic_feat,
@@ -157,10 +171,8 @@ def load_or_create_features(wav_files):
     
     return subject_data
 
-def get_subject_id(filepath):
-    return os.path.splitext(os.path.basename(filepath))[0]
-
-def balance_subjects(subject_data):
+def balance_dataset_by_subject(subject_data):
+    """平衡数据集（按受试者）"""
     print("\n正在平衡数据集（片段级别）...")
     
     all_samples = []
@@ -168,7 +180,6 @@ def balance_subjects(subject_data):
         for sample in samples:
             n_frames = len(sample['label'])
             for i in range(n_frames):
-                # 记录原始开始时间
                 original_start = i * config.step
                 all_samples.append({
                     'subject_id': subj_id,
@@ -177,7 +188,7 @@ def balance_subjects(subject_data):
                     'face': sample['face'][i],
                     'label': sample['label'][i],
                     'original_start': original_start,
-                    'original_index': i  # 记录在原始文件中的位置
+                    'original_index': i
                 })
     
     df = pd.DataFrame(all_samples)
@@ -222,7 +233,8 @@ def balance_subjects(subject_data):
     
     return balanced_data
 
-def prepare_features(subject_data):
+def prepare_feature_matrices(subject_data):
+    """准备特征矩阵"""
     print("\n正在准备特征矩阵...")
     all_acoustic = []
     all_motion = []
@@ -256,12 +268,10 @@ def prepare_features(subject_data):
     
     global TIME_MAPPING
     TIME_MAPPING = pd.DataFrame(time_mapping)
-    # TIME_MAPPING.to_csv('time_mapping.csv', index=False)
-
     return all_subject_ids, all_acoustic, all_motion, all_face, all_labels, all_original_indices
 
-def get_time_by_index(original_index):
-    """根据平衡后的索引定位原始时间"""
+def locate_original_time_by_index(original_index):
+    """根据索引定位原始时间"""
     record = TIME_MAPPING[TIME_MAPPING['balanced_index'] == original_index].iloc[0]
     start = record['original_start']
     end = start + record['window_size']
@@ -273,11 +283,11 @@ def get_time_by_index(original_index):
         'step': record['step']
     }
 
-def analyze_errors(error_df):
-    """分析错误样本的时间位置"""
+def analyze_misclassified_samples(error_df):
+    """分析错误分类样本"""
     results = []
     for _, row in error_df.iterrows():
-        time_info = get_time_by_index(row['original_index'])
+        time_info = locate_original_time_by_index(row['original_index'])
         results.append({
             'subject_id': row['subject_id'],
             'balanced_index': row['original_index'],
@@ -290,7 +300,8 @@ def analyze_errors(error_df):
         })
     return pd.DataFrame(results)
 
-def evaluate_model(features, labels, subject_ids, original_indices, model_name, model_type='svm'):
+def evaluate_classifier_performance(features, labels, subject_ids, original_indices, model_name, model_type='svm'):
+    """评估分类器性能"""
     metrics = {
         'accuracy': [],
         'precision': [],
@@ -311,50 +322,16 @@ def evaluate_model(features, labels, subject_ids, original_indices, model_name, 
         test_subjects = groups[test_idx]
         test_original_indices = [original_indices[i] for i in test_idx]
         
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
-        
-        if model_type == 'svm':
-            model = SVC(kernel='rbf', C=1.0, gamma='scale', class_weight='balanced')
-        elif model_type == 'fnn':
-            model = MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=config.seed)
-        elif model_type == 'knn':
-            model = KNeighborsClassifier(n_neighbors=5, weights='distance', metric='euclidean')
-        elif model_type == 'rf':
-            model = RandomForestClassifier(n_estimators=100, random_state=config.seed, class_weight='balanced')
-        elif model_type == 'xgb':
-            model = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', random_state=config.seed, scale_pos_weight=1)
-        elif model_type == 'lgbm':
-            model = LGBMClassifier(random_state=config.seed, class_weight='balanced', n_estimators=100, verbosity=-1)
-
+        X_train, X_test = standardize_features(X_train, X_test)
+        model = create_classifier(model_type, config.seed)
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
         
-        for i in range(len(y_test)):
-            if y_test[i] != y_pred[i]:
-                misclassified_samples.append({
-                    'subject_id': test_subjects[i],
-                    'original_index': test_original_indices[i],
-                    'true_label': y_test[i],
-                    'predicted_label': y_pred[i],
-                    'fold': fold_idx + 1
-                })
+        misclassified_samples.extend(record_misclassified_samples(
+            y_test, y_pred, test_subjects, test_original_indices, fold_idx + 1
+        ))
         
-        report = classification_report(y_test, y_pred, output_dict=True)
-        metrics['accuracy'].append(report['accuracy'])
-        for metric in ['precision', 'recall', 'f1-score']:
-            metrics[metric].append(report['weighted avg'][metric])
-    
-    # if misclassified_samples:
-    #     print(f"\n{model_name} ({model_type.upper()}) 错误预测样本:")
-    #     df_errors = pd.DataFrame(misclassified_samples)
-    #     error_details = analyze_errors(df_errors)
-    #     print(error_details[['subject_id', 'original_index', 'start_time', 'end_time', 'true_label', 'predicted_label']])
-        
-    #     error_file = f"misclassified_{model_name}_{model_type}.csv"
-    #     error_details.to_csv(error_file, index=False)
-    #     print(f"已保存详细错误信息到: {error_file}")
+        metrics.update(calculate_classification_metrics(y_test, y_pred))
     
     avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
     print(f"\n{model_name} ({model_type.upper()}) 评估结果:")
@@ -362,18 +339,16 @@ def evaluate_model(features, labels, subject_ids, original_indices, model_name, 
     print(f"精确率: {avg_metrics['precision']:.4f}")
     print(f"召回率: {avg_metrics['recall']:.4f}")
     print(f"F1分数: {avg_metrics['f1-score']:.4f}")    
-    # print(f"{avg_metrics['accuracy']:.4f}")
-    # print(f"{avg_metrics['precision']:.4f}")
-    # print(f"{avg_metrics['recall']:.4f}")
-    # print(f"{avg_metrics['f1-score']:.4f}")
     
     return avg_metrics
 
-def evaluate_modality(features, labels, modality_name, subject_ids, original_indices, model_type='svm'):
+def evaluate_single_modality_performance(features, labels, modality_name, subject_ids, original_indices, model_type='svm'):
+    """评估单模态性能"""
     print(f"\n=== 正在评估 {modality_name} 特征 ({model_type.upper()}) ===")
-    return evaluate_model(features, labels, subject_ids, original_indices, f"{modality_name}模型", model_type)
+    return evaluate_classifier_performance(features, labels, subject_ids, original_indices, f"{modality_name}模型", model_type)
 
-def evaluate_multimodal_voting(acoustic_features, motion_features, face_features, labels, subject_ids, original_indices, model_type='svm'):
+def evaluate_multimodal_voting_performance(acoustic_features, motion_features, face_features, labels, subject_ids, original_indices, model_type='svm'):
+    """评估多模态投票性能"""
     print(f"\n=== 正在评估基于投票的多模态融合 ({model_type.upper()}) ===")
     
     metrics = {
@@ -410,69 +385,25 @@ def evaluate_multimodal_voting(acoustic_features, motion_features, face_features
         X_test_motion = scalers['motion'].transform(X_test_motion)
         X_test_face = scalers['face'].transform(X_test_face)
         
-        if model_type == 'svm':
-            model_audio = SVC(kernel='rbf', probability=True, class_weight='balanced')
-            model_motion = SVC(kernel='rbf', probability=True, class_weight='balanced')
-            model_face = SVC(kernel='rbf', probability=True, class_weight='balanced')
-        elif model_type == 'fnn':
-            model_audio = MLPClassifier(hidden_layer_sizes=(100,), max_iter=500)
-            model_motion = MLPClassifier(hidden_layer_sizes=(100,), max_iter=500)
-            model_face = MLPClassifier(hidden_layer_sizes=(100,), max_iter=500)
-        elif model_type == 'knn':
-            model_audio = KNeighborsClassifier(n_neighbors=5)
-            model_motion = KNeighborsClassifier(n_neighbors=5)
-            model_face = KNeighborsClassifier(n_neighbors=5)
-        elif model_type == 'rf':
-            model_audio = RandomForestClassifier(n_estimators=100, class_weight='balanced')
-            model_motion = RandomForestClassifier(n_estimators=100, class_weight='balanced')
-            model_face = RandomForestClassifier(n_estimators=100, class_weight='balanced')
-        elif model_type == 'xgb':
-            model_audio = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', scale_pos_weight=1)
-            model_motion = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', scale_pos_weight=1)
-            model_face = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', scale_pos_weight=1)
-        elif model_type == 'lgbm':
-            model_audio = LGBMClassifier(class_weight='balanced', n_estimators=100, verbosity=-1)
-            model_motion = LGBMClassifier(class_weight='balanced', n_estimators=100, verbosity=-1)
-            model_face = LGBMClassifier(class_weight='balanced', n_estimators=100, verbosity=-1)
-            
-        model_audio.fit(scalers['audio'].transform(X_train_audio), y_train)
-        model_motion.fit(scalers['motion'].transform(X_train_motion), y_train)
-        model_face.fit(scalers['face'].transform(X_train_face), y_train)
+        models = create_multimodal_classifiers(model_type)
+        models['audio'].fit(scalers['audio'].transform(X_train_audio), y_train)
+        models['motion'].fit(scalers['motion'].transform(X_train_motion), y_train)
+        models['face'].fit(scalers['face'].transform(X_train_face), y_train)
         
         # 软投票
         weights = {'audio': 0.4, 'motion': 0.3, 'face': 0.3}
         y_pred = (
-            weights['audio'] * model_audio.predict_proba(X_test_audio)[:, 1] +
-            weights['motion'] * model_motion.predict_proba(X_test_motion)[:, 1] +
-            weights['face'] * model_face.predict_proba(X_test_face)[:, 1]
+            weights['audio'] * models['audio'].predict_proba(X_test_audio)[:, 1] +
+            weights['motion'] * models['motion'].predict_proba(X_test_motion)[:, 1] +
+            weights['face'] * models['face'].predict_proba(X_test_face)[:, 1]
         )
         y_pred = (y_pred >= 0.5).astype(int)
 
+        misclassified_samples.extend(record_misclassified_samples(
+            y_test, y_pred, test_subjects, test_original_indices, fold_idx + 1
+        ))
         
-        for i in range(len(y_test)):
-            if y_test[i] != y_pred[i]:
-                misclassified_samples.append({
-                    'subject_id': test_subjects[i],
-                    'original_index': test_original_indices[i],
-                    'true_label': y_test[i],
-                    'predicted_label': y_pred[i],
-                    'fold': fold_idx + 1
-                })
-        
-        report = classification_report(y_test, y_pred, output_dict=True)
-        metrics['accuracy'].append(report['accuracy'])
-        for metric in ['precision', 'recall', 'f1-score']:
-            metrics[metric].append(report['weighted avg'][metric])
-    
-    # if misclassified_samples:
-    #     print(f"\n多模态投票融合 ({model_type.upper()}) 错误预测样本:")
-    #     df_errors = pd.DataFrame(misclassified_samples)
-    #     error_details = analyze_errors(df_errors)
-    #     print(error_details[['subject_id', 'original_index', 'start_time', 'end_time', 'true_label', 'predicted_label']])
-        
-    #     error_file = f"misclassified_multimodal_voting_{model_type}.csv"
-    #     error_details.to_csv(error_file, index=False)
-    #     print(f"已保存详细错误信息到: {error_file}")
+        metrics.update(calculate_classification_metrics(y_test, y_pred))
     
     avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
     print(f"\n多模态投票融合 ({model_type.upper()}) 结果:")
@@ -480,16 +411,12 @@ def evaluate_multimodal_voting(acoustic_features, motion_features, face_features
     print(f"精确率: {avg_metrics['precision']:.4f}")
     print(f"召回率: {avg_metrics['recall']:.4f}")
     print(f"F1分数: {avg_metrics['f1-score']:.4f}")
-    # print(f"{avg_metrics['accuracy']:.4f}")
-    # print(f"{avg_metrics['precision']:.4f}")
-    # print(f"{avg_metrics['recall']:.4f}")
-    # print(f"{avg_metrics['f1-score']:.4f}")
 
     return avg_metrics
-    
 
-def main(data_scope="all", target_subjects=None):
-    set_seed(config.seed)
+def run_experiment(data_scope="all", target_subjects=None):
+    """运行实验主函数"""
+    utils.initialize_random_seed(config.seed)
     
     prefix = '/data/Leo/mm/data/Newborn200/data/'
     wav_files = glob.glob(f"{prefix}*.wav")
@@ -497,35 +424,49 @@ def main(data_scope="all", target_subjects=None):
     if data_scope == "specific":
         if not target_subjects:
             raise ValueError("target_subjects不能为空当data_scope='specific'")
-        wav_files = [f for f in wav_files if get_subject_id(f) in target_subjects]
+        wav_files = [f for f in wav_files if utils.extract_subject_id(f) in target_subjects]
         print("=== 指定婴儿实验（保持平衡）===")
     else:
         print("=== 婴儿哭声检测多模态评估（全部数据）===")
     
     print(f"找到 {len(wav_files)} 个音频文件")
 
-    subject_data = load_or_create_features(wav_files)
+    subject_data = load_or_extract_features(wav_files)
     print(f"共 {len(subject_data)} 个受试者")
     
-    balanced_data = balance_subjects(subject_data)
+    balanced_data = balance_dataset_by_subject(subject_data)
     
-    subject_ids, acoustic_features, motion_features, face_features, labels, original_indices = prepare_features(balanced_data)
+    subject_ids, acoustic_features, motion_features, face_features, labels, original_indices = prepare_feature_matrices(balanced_data)
 
     print(f"\n特征维度统计:")
     print(f"声学特征维度: {np.array(acoustic_features).shape}")
     print(f"运动特征维度: {np.array(motion_features).shape}")
     print(f"面部特征维度: {np.array(face_features).shape}")
     
-    
     model_type = 'svm'  # 可选 'svm', 'fnn', 'knn', 'rf', 'xgb', 'lgbm'
     
-    evaluate_modality(acoustic_features, labels, "声学特征", subject_ids, original_indices, model_type)
-    evaluate_modality(motion_features, labels, "运动特征", subject_ids, original_indices, model_type)
-    evaluate_modality(face_features, labels, "面部特征", subject_ids, original_indices, model_type)
-    evaluate_modality((acoustic_features, motion_features, face_features), labels, "多模态特征", subject_ids, original_indices, model_type)
-    evaluate_multimodal_voting(acoustic_features, motion_features, face_features, labels, subject_ids, original_indices, model_type)
+    evaluate_single_modality_performance(acoustic_features, labels, "声学特征", subject_ids, original_indices, model_type)
+    evaluate_single_modality_performance(motion_features, labels, "运动特征", subject_ids, original_indices, model_type)
+    evaluate_single_modality_performance(face_features, labels, "面部特征", subject_ids, original_indices, model_type)
+    evaluate_single_modality_performance((acoustic_features, motion_features, face_features), labels, "多模态特征", subject_ids, original_indices, model_type)
+    evaluate_multimodal_voting_performance(acoustic_features, motion_features, face_features, labels, subject_ids, original_indices, model_type)
     print("\n=== 所有评估完成 ===")
 
+# 写一个函数，输入文件名，输出提取出来的音频、Body、Face特征的维度
+def print_feature_dimensions(dataDir):
+    """打印特征维度"""
+    acoustic_feat, _ = extract_audio_features(dataDir)
+    motion_feat = extract_body_motion_features(dataDir)
+    face_feat = extract_facial_features(dataDir)
+    
+    print(f"声学特征维度: {np.array(acoustic_feat).shape}")
+    print(f"运动特征维度: {np.array(motion_feat).shape}")
+    print(f"面部特征维度: {np.array(face_feat).shape}")
+
 if __name__ == "__main__":
-    main(data_scope="all")    
-    # main(data_scope="specific", target_subjects=target_subjects)
+    # prefix = '/data/Leo/mm/data/Newborn200/data/'
+    # name = '50cm3.16kg1'
+    # file = f"{prefix}{name}.wav"
+    # print_feature_dimensions(file)
+
+    run_experiment(data_scope="all")

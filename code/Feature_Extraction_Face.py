@@ -1,8 +1,7 @@
 import numpy as np
-import json
 from typing import List, Dict, Tuple, Callable
-import os
 from math import isnan
+import utils
 
 def calculate_mar(landmarks: List[List[float]]) -> float:
     """计算嘴部纵横比(Mouth Aspect Ratio)"""
@@ -116,79 +115,46 @@ def extract_facial_features(window_data: List[Dict]) -> Dict[str, np.ndarray]:
         'eyebrows': eyebrows,
     }
 
+# facial_features.py
+
 def facial_features(input_path: str, window_size_sec: float, step_size_sec: float, label_path: str) -> Tuple[np.ndarray, List[str], List[Dict]]:
-    """
-    从输入文件中提取全脸特征
-    
-    参数:
-        input_path: 输入JSON文件路径
-        window_size_sec: 分析窗口大小(秒)
-        step_size_sec: 滑动步长(秒)
-        label_path: 标签文件路径
-        
-    返回:
-        features_array: 特征矩阵 (n_windows, 12)
-        feature_names: 特征名称列表
-        window_metadata: 窗口元数据列表
-    """
+    """从输入文件中提取全脸特征"""
     try:
-        # 数据加载与验证
-        if not os.path.exists(input_path):
-            raise FileNotFoundError(f"面部特征文件不存在: {input_path}")
-            
-        with open(input_path) as f:
-            data = json.load(f)
-        
+        # 数据加载
+        data = utils.load_and_validate_json(input_path)
         fps = float(data['video_info']['fps'])
         frames = data.get('frames', [])
         
         # 时间范围处理
-        min_start_time, max_end_time = float('inf'), 0.0
-        if os.path.exists(label_path):
-            with open(label_path) as f:
-                for line in f:
-                    if len(parts := line.strip().split('\t')) >= 2:
-                        min_start_time = min(min_start_time, float(parts[0]))
-                        max_end_time = max(max_end_time, float(parts[1]))
-        
-        # 转换为帧索引并裁剪
-        frames = frames[int(min_start_time * fps):int(max_end_time * fps)]
+        min_start_time, max_end_time = utils.get_valid_time_range(label_path)
+        frames = utils.crop_data_by_time(frames, fps, min_start_time, max_end_time)
         
         # 窗口处理
-        window_size_frames = int(round(window_size_sec * fps))
-        step_size_frames = int(round(step_size_sec * fps))
+        window_size_frames, step_size_frames = utils.calculate_window_params(fps, window_size_sec, step_size_sec)
         
         # 特征计算
         feature_calculators = get_facial_feature_calculators()
         feature_names = [name for name, _ in feature_calculators]
-        n_windows = len(range(0, len(frames), step_size_frames))
-        
-        features = np.zeros((n_windows, len(feature_calculators)))
+        features = np.zeros((len(range(0, len(frames), step_size_frames)), len(feature_calculators)))
         metadata = []
         
         for i, start in enumerate(range(0, len(frames), step_size_frames)):
             end = min(start + window_size_frames, len(frames))
+            
+            # 记录元数据
+            metadata.append(utils.create_window_metadata(start, end, fps))
+            
+            # 计算特征
             window_data = frames[start:end]
-            
-            metadata.append({
-                'start_frame': start,
-                'end_frame': end - 1,
-                'start_sec': start / fps,
-                'end_sec': (end - 1) / fps,
-            })
-            
-            # 提取全脸特征
             feature_dict = extract_facial_features(window_data)
-            
-            # 计算窗口特征
             features[i] = [func(feature_dict) for _, func in feature_calculators]
         
-        return features, feature_names
+        return features, feature_names, metadata
     
     except Exception as e:
         print(f"面部特征提取错误: {str(e)}")
         return np.zeros((1, len(get_facial_feature_calculators()))), [name for name, _ in get_facial_feature_calculators()], []
-
+    
 
 # 使用示例
 if __name__ == "__main__":
@@ -196,7 +162,7 @@ if __name__ == "__main__":
     input_json = prefix + "Face/50cm3.24kg_face_landmarks.json"
     label_file = prefix + "Label/50cm3.24kg.txt"    
     
-    features, names = facial_features(
+    features, names, meta = facial_features(
         input_path=input_json,
         window_size_sec=2.5,
         step_size_sec=2.5,
@@ -204,3 +170,4 @@ if __name__ == "__main__":
     )
     print(f"特征矩阵形状: {features.shape}")
     print(f"特征名称: {names}")
+    print(f"窗口元数据: {meta[:5]}")  # 打印前5个窗口的元数据
