@@ -53,18 +53,19 @@ def get_feature_calculators(fps: int) -> List[Tuple[str, Callable]]:
     ]
 
 def body_features(input_path: str, window_size_sec: float, step_size_sec: float, label_path: str) -> Tuple[np.ndarray, List[str], List[Dict]]:
-    """从输入文件中提取运动特征"""
+    """从输入文件中提取运动特征（优化版，自动丢弃不足窗口）"""
     # 加载数据
     data = utils.load_and_validate_json(input_path)
     features = data['features']
     fps = data['video_info']['fps']
     
-    # 获取有效时间范围
+    # 获取有效时间范围并裁剪数据
     min_start_time, max_end_time = utils.get_valid_time_range(label_path)
     features = utils.crop_data_by_time(features, fps, min_start_time, max_end_time)
     
-    # 计算窗口参数
-    window_size_frames, step_size_frames = utils.calculate_window_params(fps, window_size_sec, step_size_sec)
+    # 计算窗口参数并生成有效窗口索引
+    window_size, step_size = utils.calculate_window_params(fps, window_size_sec, step_size_sec)
+    valid_indices = np.arange(0, len(features) - window_size + 1, step_size)
     
     # 获取特征计算器
     feature_calculators = get_feature_calculators(fps)
@@ -74,30 +75,32 @@ def body_features(input_path: str, window_size_sec: float, step_size_sec: float,
         for name, _ in feature_calculators
     ]
     
-    # 初始化输出
-    n_windows = len(range(0, len(features), step_size_frames))
-    features_array = np.zeros((n_windows, len(feature_names)))
+    # 预分配数组（使用有效窗口数量）
+    features_array = np.zeros((len(valid_indices), len(feature_names)))
     window_metadata = []
     
-    for i, start_idx in enumerate(range(0, len(features), step_size_frames)):
-        end_idx = min(start_idx + window_size_frames, len(features))
+    # 向量化处理每个有效窗口
+    for i, start_idx in enumerate(valid_indices):
+        end_idx = start_idx + window_size
         
-        # 记录元数据
+        # 记录元数据（自动计算绝对时间）
         window_metadata.append(utils.create_window_metadata(
             min_start_time * fps + start_idx,
             min_start_time * fps + end_idx,
             fps
         ))
         
-        # 计算特征
+        # 计算特征（向量化版本）
         window_data = features[start_idx:end_idx]
         feature_values = []
         for key in feature_keys:
             motion = extract_motion_components(window_data, key)
-            for _, calculator in feature_calculators:
-                feature_values.append(calculator(motion))
+            feature_values.extend(
+                calculator(motion) 
+                for _, calculator in feature_calculators
+            )
         
-        features_array[i, :] = feature_values
+        features_array[i] = feature_values
     
     return features_array, feature_names, window_metadata
 

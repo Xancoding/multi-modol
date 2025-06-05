@@ -118,7 +118,7 @@ def extract_facial_features(window_data: List[Dict]) -> Dict[str, np.ndarray]:
 # facial_features.py
 
 def facial_features(input_path: str, window_size_sec: float, step_size_sec: float, label_path: str) -> Tuple[np.ndarray, List[str], List[Dict]]:
-    """从输入文件中提取全脸特征"""
+    """从输入文件中提取全脸特征（优化版，自动丢弃不足窗口）"""
     try:
         # 数据加载
         data = utils.load_and_validate_json(input_path)
@@ -129,22 +129,30 @@ def facial_features(input_path: str, window_size_sec: float, step_size_sec: floa
         min_start_time, max_end_time = utils.get_valid_time_range(label_path)
         frames = utils.crop_data_by_time(frames, fps, min_start_time, max_end_time)
         
-        # 窗口处理
-        window_size_frames, step_size_frames = utils.calculate_window_params(fps, window_size_sec, step_size_sec)
+        # 窗口处理（只处理完整窗口）
+        window_size, step_size = utils.calculate_window_params(fps, window_size_sec, step_size_sec)
+        valid_indices = np.arange(0, len(frames) - window_size + 1, step_size)
         
-        # 特征计算
+        # 特征计算器
         feature_calculators = get_facial_feature_calculators()
         feature_names = [name for name, _ in feature_calculators]
-        features = np.zeros((len(range(0, len(frames), step_size_frames)), len(feature_calculators)))
+        
+        # 预分配数组
+        features = np.zeros((len(valid_indices), len(feature_calculators)))
         metadata = []
         
-        for i, start in enumerate(range(0, len(frames), step_size_frames)):
-            end = min(start + window_size_frames, len(frames))
+        # 处理每个有效窗口
+        for i, start in enumerate(valid_indices):
+            end = start + window_size
             
-            # 记录元数据
-            metadata.append(utils.create_window_metadata(start, end, fps))
+            # 记录元数据（使用绝对时间）
+            metadata.append(utils.create_window_metadata(
+                min_start_time * fps + start,
+                min_start_time * fps + end,
+                fps
+            ))
             
-            # 计算特征
+            # 向量化特征计算
             window_data = frames[start:end]
             feature_dict = extract_facial_features(window_data)
             features[i] = [func(feature_dict) for _, func in feature_calculators]
@@ -153,7 +161,8 @@ def facial_features(input_path: str, window_size_sec: float, step_size_sec: floa
     
     except Exception as e:
         print(f"面部特征提取错误: {str(e)}")
-        return np.zeros((1, len(get_facial_feature_calculators()))), [name for name, _ in get_facial_feature_calculators()], []
+        n_features = len(get_facial_feature_calculators())
+        return np.zeros((0, n_features)), [name for name, _ in get_facial_feature_calculators()], []
     
 
 # 使用示例
