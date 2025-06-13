@@ -575,9 +575,9 @@ def feature_extraction(signal, sampling_rate, window, step, deltas=True):
     feature_names.append("spectral_rolloff")
     feature_names += ["mfcc_{0:d}".format(mfcc_i)
                       for mfcc_i in range(1, n_mfcc_feats + 1)]
-    # feature_names += ["chroma_{0:d}".format(chroma_i)
-    #                   for chroma_i in range(1, n_chroma_feats)]
-    # feature_names.append("chroma_std")
+    feature_names += ["chroma_{0:d}".format(chroma_i)
+                      for chroma_i in range(1, n_chroma_feats)]
+    feature_names.append("chroma_std")
 
     # add names for delta features:
     if deltas:
@@ -709,8 +709,9 @@ def NICUWav2Segments(dataDir, labelDir):
 def acoustic_features_and_spectrogram(audioData):
     # Feature extraction for acoustic features
     feature_List = []
+    feature_names = []
     for i in range(audioData.shape[0]):
-        features, feature_names = feature_extraction(signal=audioData[i], sampling_rate=config.audioSampleRate,
+        features, base_feature_names = feature_extraction(signal=audioData[i], sampling_rate=config.audioSampleRate,
                                                      window=config.FFTwindow, step=config.FFTOverlap, deltas=False)
 
         features_mean = np.mean(features, axis=1)
@@ -720,24 +721,31 @@ def acoustic_features_and_spectrogram(audioData):
         features = np.concatenate((features_mean, features_median, features_std))
         feature_List.append(features)
 
+        if i == 0:
+            for name in base_feature_names:
+                feature_names.extend([
+                    f"{name}_mean",
+                    f"{name}_median",
+                    f"{name}_std"
+                ])
+
     acoustic_feature = np.array(feature_List)
-
-
-    # Feature extraction for Spectrogram
-    feature_List = []
-    for i in range(audioData.shape[0]):
-        # 归一化
-        sig_array_norm = dc_normalize(audioData[i])
-
-        # spectrogram
-        spectrogram_feature, time_axis, freq_axis = spectrogram(signal=sig_array_norm,
-                                                        sampling_rate=config.audioSampleRate,
-                                                        window=config.FFTwindow, step=config.FFTOverlap,
-                                                        plot=False, show_progress=False)
-        spectrogram_feature = (spectrogram_feature - spectrogram_feature.min()) / (spectrogram_feature.max() - spectrogram_feature.min() + 1e-10)
-        feature_List.append(spectrogram_feature)
-
-    spectrogram_feature = np.array(feature_List)
-
-    # return acoustic_feature, spectrogram_feature, feature_names
     return acoustic_feature, feature_names
+
+
+    # # Feature extraction for Spectrogram
+    # feature_List = []
+    # for i in range(audioData.shape[0]):
+    #     # 归一化
+    #     sig_array_norm = dc_normalize(audioData[i])
+
+    #     # spectrogram
+    #     spectrogram_feature, time_axis, freq_axis = spectrogram(signal=sig_array_norm,
+    #                                                     sampling_rate=config.audioSampleRate,
+    #                                                     window=config.FFTwindow, step=config.FFTOverlap,
+    #                                                     plot=False, show_progress=False)
+    #     spectrogram_feature = (spectrogram_feature - spectrogram_feature.min()) / (spectrogram_feature.max() - spectrogram_feature.min() + 1e-10)
+    #     feature_List.append(spectrogram_feature)
+
+    # spectrogram_feature = np.array(feature_List)
+    # return acoustic_feature, spectrogram_feature, feature_names

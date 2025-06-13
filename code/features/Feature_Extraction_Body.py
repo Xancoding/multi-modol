@@ -46,6 +46,7 @@ def get_feature_calculators(fps: int) -> List[Tuple[str, Callable]]:
     return [
         # 基础统计量
         ('std', lambda d: np.std(d['r'])),
+        ('median', lambda d: np.median(d['r'])),
         ('mean', lambda d: np.mean(d['r'])),
         ('max', lambda d: np.max(d['r'])),
         ('min', lambda d: np.min(d['r'])),
