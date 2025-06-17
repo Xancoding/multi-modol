@@ -40,81 +40,75 @@ def extract_audio_features(dataDir):
     """Extract audio features"""
     labelDir = utils.get_label_file_path(dataDir)
     sample = NICUWav2Segments(dataDir, labelDir)
-    acoustic_feature, _ = acoustic_features_and_spectrogram(sample["data"])
-    return acoustic_feature, sample["label"]
+    acoustic_feature, acoustic_feature_name = acoustic_features_and_spectrogram(sample["data"])
+    return acoustic_feature, sample["label"], acoustic_feature_name
 
 def extract_body_motion_features(dataDir):
     """Extract body motion features"""
     file = utils.get_motion_feature_file_path(dataDir)
     labelDir = utils.get_label_file_path(dataDir)
-    motion_feature, _, _ = body_features(file, config.slidingWindows, config.step, labelDir)
-    return motion_feature
+    motion_feature, motion_feature_name, _ = body_features(file, config.slidingWindows, config.step, labelDir)
+    return motion_feature, motion_feature_name
 
 def extract_facial_features(dataDir):
     """Extract facial features"""
     file = utils.get_face_landmark_file_path(dataDir)
     labelDir = utils.get_label_file_path(dataDir)
-    facial_feature, _, _ = facial_features(file, config.slidingWindows, config.step, labelDir)
-    return facial_feature
+    facial_feature, facial_feature_name, _ = facial_features(file, config.slidingWindows, config.step, labelDir)
+    return facial_feature, facial_feature_name
 
 def load_or_extract_features(wav_files):
-    """加载或提取特征数据"""
+    """加载或提取特征数据（包含名称）"""
     feature_dir = '/data/Leo/mm/data/Newborn200/Features'
     os.makedirs(feature_dir, exist_ok=True)
     subject_data = {}
-    existing_files = set(os.listdir(feature_dir))
     
-    print("\n正在加载/生成特征数据...")
     for file in tqdm(wav_files, desc="处理文件中"):
-        label_path = utils.get_label_file_path(file)
-        feature_file = utils.generate_feature_filename(label_path)
-        feature_path = os.path.join(feature_dir, feature_file)
+        feature_path = os.path.join(feature_dir, utils.generate_feature_filename(file))
         
-        if feature_file in existing_files:
+        # 尝试加载已保存的特征（包含名称）
+        if os.path.exists(feature_path):
             try:
-                data = np.load(feature_path)
-                subject_id = utils.extract_subject_id(file)
-                if subject_id not in subject_data:
-                    subject_data[subject_id] = []
-                subject_data[subject_id].append({
+                data = np.load(feature_path, allow_pickle=True)
+                subject_data.setdefault(utils.extract_subject_id(file), []).append({
                     'acoustic': data['acoustic'],
                     'motion': data['motion'],
                     'face': data['face'],
-                    'label': data['label']
+                    'label': data['label'],
+                    'acoustic_feature_names': data['acoustic_feature_names'].tolist(),
+                    'motion_feature_names': data['motion_feature_names'].tolist(),
+                    'face_feature_names': data['face_feature_names'].tolist()
                 })
                 continue
             except Exception as e:
-                print(f"\n加载特征文件 {feature_file} 失败，将重新生成: {str(e)}")
-        
-        subject_id = utils.extract_subject_id(file)
-        acoustic_feat, label = extract_audio_features(file)
-        motion_feat = extract_body_motion_features(file)
-        face_feat = extract_facial_features(file)
+                print(f"加载特征失败，将重新生成: {e}")
 
-        # 检查特征维度是否一致
-        if len(acoustic_feat) != len(motion_feat) or len(acoustic_feat) != len(face_feat):
-            print(f"\n警告: {subject_id} 的特征维度不一致!")
-            print(f"声学特征维度: {len(acoustic_feat)}")
-            print(f"运动特征维度: {len(motion_feat)}")
-            print(f"面部特征维度: {len(face_feat)}")
-            print(f"标签长度: {len(label)}")
-            continue
+        # 提取新特征（确保名称被捕获）
+        acoustic_feat, label, audio_names = extract_audio_features(file)
+        motion_feat, motion_names = extract_body_motion_features(file)
+        face_feat, face_names = extract_facial_features(file)
 
-        sample = {
+        # 保存到NPZ文件（包含名称）
+        np.savez(
+            feature_path,
+            acoustic=acoustic_feat,
+            motion=motion_feat,
+            face=face_feat,
+            label=label,
+            acoustic_feature_names=audio_names,
+            motion_feature_names=motion_names,
+            face_feature_names=face_names
+        )
+
+        subject_data.setdefault(utils.extract_subject_id(file), []).append({
             'acoustic': acoustic_feat,
             'motion': motion_feat,
             'face': face_feat,
-            'label': label
-        }
-        np.savez(feature_path,
-                acoustic=acoustic_feat,
-                motion=motion_feat,
-                face=face_feat,
-                label=label)
-        
-        if subject_id not in subject_data:
-            subject_data[subject_id] = []
-        subject_data[subject_id].append(sample)
+            'label': label,
+            'acoustic_feature_names': audio_names,
+            'motion_feature_names': motion_names,
+            'face_feature_names': face_names
+        })
     
     return subject_data
 
@@ -126,6 +120,15 @@ def prepare_feature_matrices(subject_data):
     all_face = []
     all_labels = []
     all_subject_ids = []
+
+    # 获取特征名称（假设所有样本的特征名称相同）
+    first_sample = next(iter(subject_data.values()))[0]
+    acoustic_feature_names = first_sample.get('acoustic_feature_names', None)
+    motion_feature_names = first_sample.get('motion_feature_names', None)
+    face_feature_names = first_sample.get('face_feature_names', None)   
+
+    if None in [acoustic_feature_names, motion_feature_names, face_feature_names]:
+        raise ValueError("特征名称未正确加载！请检查特征提取函数") 
     
     # 统计婴儿哭闹情况
     crying_infants = set()
@@ -168,8 +171,16 @@ def prepare_feature_matrices(subject_data):
     print(f"不带哭声的片段数量: {non_crying_segments}")
     print(f"哭闹片段占比: {crying_segments/len(all_labels):.2%}")
     
-    return all_subject_ids, all_acoustic, all_motion, all_face, all_labels
-
+    return (
+        all_subject_ids, 
+        all_acoustic, 
+        all_motion, 
+        all_face, 
+        all_labels,
+        acoustic_feature_names,
+        motion_feature_names,
+        face_feature_names
+    )
 def load_data():
     """Load and prepare all data"""
     prefix = '/data/Leo/mm/data/Newborn200/data/'
@@ -179,11 +190,22 @@ def load_data():
     subject_data = load_or_extract_features(wav_files)
     print(f"Total subjects: {len(subject_data)}")
     
-    subject_ids, acoustic_features, motion_features, face_features, labels = prepare_feature_matrices(subject_data)
+    (subject_ids, acoustic_features, motion_features, 
+     face_features, labels, acoustic_feature_names,
+     motion_feature_names, face_feature_names) = prepare_feature_matrices(subject_data)
     
     print(f"\nFeature dimensions:")
-    print(f"Audio features: {np.array(acoustic_features).shape}")
-    print(f"Motion features: {np.array(motion_features).shape}")
-    print(f"Face features: {np.array(face_features).shape}")
+    print(f"Audio features: {np.array(acoustic_features).shape} (names: {len(acoustic_feature_names)})")
+    print(f"Motion features: {np.array(motion_features).shape} (names: {len(motion_feature_names)})")
+    print(f"Face features: {np.array(face_features).shape} (names: {len(face_feature_names)})")
     
-    return subject_ids, acoustic_features, motion_features, face_features, labels
+    return (
+        subject_ids, 
+        acoustic_features, 
+        motion_features, 
+        face_features, 
+        labels,
+        acoustic_feature_names,
+        motion_feature_names,
+        face_feature_names
+    )
