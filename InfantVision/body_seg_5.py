@@ -133,7 +133,7 @@ def Generate_Intime_Mask_AVI(input_video_path, segmentation_pipeline, body_part_
     # 创建输出目录
     # output_dir = os.path.join(os.path.dirname(input_video_path), 'body')
     # 创建输出目录，在上一层目录下
-    output_dir = os.path.join(os.path.dirname(os.path.dirname(input_video_path)), 'Body')
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(input_video_path)), 'NewBody')
     os.makedirs(output_dir, exist_ok=True)
 
     # 读取视频文件
@@ -250,6 +250,7 @@ def Generate_Intime_Mask_AVI(input_video_path, segmentation_pipeline, body_part_
             "Left-leg": [],
             "Right-leg": [],
             "Torso-skin": [],
+            "WholeBody": [],
             "WholeFrameMotion": [],
         }
         
@@ -278,7 +279,38 @@ def Generate_Intime_Mask_AVI(input_video_path, segmentation_pipeline, body_part_
                         ]
                         frame_motion_features[part_name].append(motion_vector)
 
-        # WholeFrameMotion改为与其他部位一致的结构
+        # ===== WholeBody =====
+        if optical_flow is not None:
+            # 合并指定部位的mask
+            combined_mask = np.zeros_like(gray_frame, dtype=bool)
+            for part_name in ['Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg', 'Torso-skin']:
+                if part_name in part_masks_dict:
+                    for mask in part_masks_dict[part_name]:
+                        combined_mask = combined_mask | (mask > 0)
+            
+            if combined_mask.any():
+                # 计算运动特征
+                shift_x, shift_y = np.mean(optical_flow[combined_mask], axis=0)
+                shift_r = np.sqrt(shift_x**2 + shift_y**2)
+                shift_a = np.degrees(np.arctan2(shift_y, shift_x))
+                
+                # 计算合并部位的平均分数
+                combined_scores = []
+                for part_name in ['Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg', 'Torso-skin']:
+                    if part_name in part_scores_dict:
+                        combined_scores.extend(part_scores_dict[part_name])
+                avg_score = np.mean(combined_scores) if combined_scores else 0.0
+                
+                frame_motion_features["WholeBody"].append([
+                    float(shift_x), 
+                    float(shift_y), 
+                    float(shift_r), 
+                    float(shift_a),
+                    float(avg_score)
+                ])
+        # ===== 新增部分结束 =====
+
+        # 计算全局运动特征
         if optical_flow is not None:
             shift_x, shift_y = np.mean(optical_flow, axis=(0,1))
             shift_r = np.sqrt(shift_x**2 + shift_y**2)
@@ -323,7 +355,7 @@ def main():
     for video_file in video_files:
         Generate_Intime_Mask_AVI(
             input_video_path=video_file,
-            segmentation_pipeline=pipeline(Tasks.image_segmentation, 'iic/cv_resnet101_image-multiple-human-parsing', device='cuda:1'),
+            segmentation_pipeline=pipeline(Tasks.image_segmentation, 'iic/cv_resnet101_image-multiple-human-parsing', device='cuda:2'),
             body_part_colors={
                 'Left-arm': (255, 0, 0, 1),      # Red for left arm
                 'Right-arm': (255, 0, 0, 1),     # Red for right arm

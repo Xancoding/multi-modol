@@ -31,16 +31,6 @@ def extract_motion_components(window_data: List[Dict], key: str) -> Dict[str, np
         'angle': np.nan_to_num(np.array(angle), nan=0)
     }
 
-def calculate_entropy(values: np.ndarray) -> float:
-    """计算近似熵（运动不规则性）"""
-    clean_values = values[~np.isnan(values)]
-    if len(clean_values) < 10:
-        return 0
-    hist = np.histogram(clean_values, bins=10)[0]
-    prob = hist / hist.sum() + 1e-10  # 避免log(0)
-    return -np.sum(prob * np.log(prob))
-
-
 def get_feature_calculators(fps: int) -> List[Tuple[str, Callable]]:
     """返回特征计算函数列表（多维度优化版）"""
     return [
@@ -50,7 +40,6 @@ def get_feature_calculators(fps: int) -> List[Tuple[str, Callable]]:
         ('mean', lambda d: np.mean(d['r'])),
         ('max', lambda d: np.max(d['r'])),
         ('min', lambda d: np.min(d['r'])),
-        ('entropy', lambda d: calculate_entropy(d['r'])),
     ]
 
 def body_features(input_path: str, window_size_sec: float, step_size_sec: float, label_path: str) -> Tuple[np.ndarray, List[str], List[Dict]]:
@@ -70,7 +59,10 @@ def body_features(input_path: str, window_size_sec: float, step_size_sec: float,
     
     # 获取特征计算器
     feature_calculators = get_feature_calculators(fps)
-    feature_keys = ['Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg']
+    feature_keys = ['Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg'] # 局部肢体
+    # feature_keys = ['WholeFrameMotion'] # 完整画面
+    # feature_keys = ['WholeBody'] # 人体整体
+
     feature_names = [
         f"{key}_{name}" for key in feature_keys 
         for name, _ in feature_calculators
@@ -113,7 +105,7 @@ if __name__ == "__main__":
     label_file = prefix + "Label/50cm3.24kg.txt"
     window_size = 2.5  # 2.5秒窗口大小
     step_size = 2.5    # 1.5秒步长
-    
+      
     # 提取特征
     features, feature_names, meta = body_features(input_json, window_size, step_size, label_file)
     

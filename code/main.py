@@ -1,97 +1,121 @@
 from data_loader import load_data
-from evaluator import evaluate_modality
+from evaluator import ModelEvaluator
 import config
 import utils
-import numpy as np
+import random
+
+def select_test_cases(subject_ids, hard_cases_num=20, easy_cases_num=20):
+    """Select balanced test cases (hard and easy)"""
+    # Predefined difficult cases
+    difficult_cases = {
+        "50cm3.16kg", "52cm3.52kg1", "50cm3.2kg", "50cm3.4kg2", "51cm3.25kg",
+        "47cm2.9kg", "48cm2.6kg", "48cm2.7kg1", "48cm2.58kg", "48cm3.15kg",
+        "48cm3.44kg", "49cm3.4kg", "50cm2.94kg", "50cm2.95kg2", "50cm3.1kg2",
+        "50cm3.2kg4", "50cm3.13kg", "50cm3.15kg1", "50cm3.15kg2", "50cm3.22kg",
+        "50cm3.22kg1", "50cm3.24kg", "50cm3.44kg", "50cm3.71kg", "50cm3kg3",
+        "51cm2.97kg", "51cm3.2kg", "51cm3.55kg", "51cm3.74kg", "51cm4.05kg",
+        "52cm3.4kg1", "52cm3.75kg", "53cm3.81kg", "54cm3.9kg"
+    }
+    all_cases = set(subject_ids)
+    easy_cases = list(all_cases - difficult_cases)
+    # Random selection with seed
+    random.seed(config.seed)
+    selected_hard = random.sample(difficult_cases, min(hard_cases_num, len(difficult_cases)))
+    selected_easy = random.sample(easy_cases, min(easy_cases_num, len(easy_cases)))
+    print(f"Total: {len(all_cases)} | Hard: {len(selected_hard)} | Easy: {len(selected_easy)}")
+    return selected_easy, selected_hard
 
 def print_top_features(feature_names, importance_scores, modality_name, top_n=10):
-    """打印前N个重要特征"""
-    if len(feature_names) == 0 or importance_scores is None:
+    """Print top N important features with their scores"""
+    if not feature_names or importance_scores is None:
         return
-        
-    # 合并特征名和重要性分数
-    feature_importance = list(zip(feature_names, importance_scores))
-    # 按重要性排序(降序)
-    feature_importance.sort(key=lambda x: x[1], reverse=True)
     
-    print(f"\n{modality_name}模态前{top_n}重要特征:")
-    for i, (name, score) in enumerate(feature_importance[:top_n]):
-        print(f"{i+1}. {name}: {score:.4f}")
+    sorted_features = sorted(zip(feature_names, importance_scores), 
+                           key=lambda x: x[1], reverse=True)
+    
+    print(f"\n{modality_name} Top {top_n} Features:")
+    for i, (name, score) in enumerate(sorted_features[:top_n]):
+        print(f"{i+1}. {name}: {score}")
 
-def print_features():
-    """打印各模态特征维度(调试用)"""
-    from features.Feature_Extraction_Audio import acoustic_features_and_spectrogram, NICUWav2Segments
-    from features.Feature_Extraction_Body import body_features
-    from features.Feature_Extraction_Face import facial_features
-    import utils
+def run_evaluations(evaluator, features, labels, subject_ids, model_type):
+    """
+    Run all evaluation methods with easy commenting capability.
+    Returns multimodal importances for feature importance analysis.
+    """
+    # Unpack features for clarity
+    acoustic, motion, face = features[0], features[1], features[2]
+    combined_features = (acoustic, motion, face)
     
-    dataDir = '/data/Leo/mm/data/Newborn200/data/50cm3.37kg.wav'
-    labelDir = utils.get_label_file_path(dataDir)
-    sample = NICUWav2Segments(dataDir, labelDir)
+    # ======================================================
+    # Evaluation Methods (Comment/uncomment as needed)
+    # ======================================================
     
-    acoustic_feature, audio_feature_names = acoustic_features_and_spectrogram(sample["data"])
-    print("音频特征维度:", acoustic_feature.shape)
-    print("音频特征数量:", len(audio_feature_names))
+    # 1. Audio modality evaluation
+    evaluator.evaluate_feature_combination(
+        acoustic, labels, "Audio", subject_ids, model_type
+    )
+
+    # 2. Motion modality evaluation
+    evaluator.evaluate_feature_combination(
+        motion, labels, "Motion", subject_ids, model_type
+    )
     
-    file = utils.get_motion_feature_file_path(dataDir)
-    motion_feature, body_feature_names, _ = body_features(file, config.slidingWindows, config.step, labelDir)
-    print("运动特征维度:", motion_feature.shape)
-    print("运动特征数量:", len(body_feature_names))
+    # 3. Face modality evaluation
+    evaluator.evaluate_feature_combination(
+        face, labels, "Face", subject_ids, model_type
+    )
     
-    file = utils.get_face_landmark_file_path(dataDir)
-    facial_feature, facial_feature_names, _ = facial_features(file, config.slidingWindows, config.step, labelDir)
-    print("面部特征维度:", facial_feature.shape)
-    print("面部特征数量:", len(facial_feature_names))
+    # 4. Feature-level fusion evaluation
+    multimodal_importances = evaluator.evaluate_feature_combination(
+        combined_features, 
+        labels, "Multimodal-Feature Level Fusion (Concatenation)", subject_ids, model_type
+    )
+    
+    # 5. Decision-level fusion evaluation
+    evaluator.evaluate_multimodal_fusion(
+        combined_features, 
+        labels, "Multimodal-Decision Level Fusion (Stacking)", 
+        subject_ids, model_type, model_type, model_type
+    )
+    
+    return multimodal_importances
 
 def main():
-    """主实验函数"""
+    """Main experiment function"""
     utils.initialize_random_seed(config.seed)
     
-    # 加载数据
-    (subject_ids, acoustic_features, motion_features, 
-     face_features, labels, acoustic_feature_names,
-     motion_feature_names, face_feature_names) = load_data()
-    
-    model_type = 'lgbm'  # 可选: 'svm', 'fnn', 'knn', 'rf', 'xgb', 'lgbm'
-    
-    # 评估单模态
-    print("\n" + "="*50)
-    print("开始单模态评估")
-    print("="*50)
-    
-    audio_metrics, audio_importances = evaluate_modality(
-        acoustic_features, labels, "音频", subject_ids, model_type)
-    
-    motion_metrics, motion_importances = evaluate_modality(
-        motion_features, labels, "运动", subject_ids, model_type)
-    
-    face_metrics, face_importances = evaluate_modality(
-        face_features, labels, "面部", subject_ids, model_type)
-        
-    # 评估多模态
-    print("\n" + "="*50)
-    print("开始多模态评估")
-    print("="*50)
-    
-    multimodal_metrics, multimodal_importances = evaluate_modality(
-        (acoustic_features, motion_features, face_features), 
-        labels, "多模态", subject_ids, model_type)
-    
-    # 合并所有特征名称
-    all_feature_names = (acoustic_feature_names + 
-                        motion_feature_names + 
-                        face_feature_names)
-    
-    print("\n=== 所有评估完成 ===")
+    # Load all data
+    (subject_ids, features, labels, feature_names) = load_data()
 
-    # if model_type in ['xgb', 'lgbm', 'rf']:
-    #     print_top_features(acoustic_feature_names, audio_importances, "音频")
-    #     print_top_features(motion_feature_names, motion_importances, "运动")
-    #     print_top_features(face_feature_names, face_importances, "面部")
-    #     print_top_features(all_feature_names, multimodal_importances, "多模态")
-    # else:
-    #     print("没有可用的特征重要性分数，无法打印重要特征。")    
+    # Select test cases
+    easy_cases, hard_cases = select_test_cases(subject_ids,
+                                               config.hard_cases_num, 
+                                               config.easy_cases_num)
+    
+    # Initialize evaluator
+    # evaluator = ModelEvaluator()
+    evaluator = ModelEvaluator(easy_cases, hard_cases)
+
+    
+    # Run evaluations (comment out methods in run_evaluations as needed)
+    multimodal_importances = run_evaluations(
+        evaluator, 
+        features[:3],  # acoustic, motion, face features
+        labels,
+        subject_ids,
+        config.model_type
+    )
+    
+    print("\n=== Evaluation Complete ===")
+    
+    # Print feature importance if applicable
+    if config.model_type in ['xgb', 'lgbm', 'rf']:
+        print_top_features(
+            sum(feature_names[:3], []),  # Combine all feature names
+            multimodal_importances, 
+            "多模态", 
+            top_n=20
+        )
 
 if __name__ == "__main__":
-    # print_features()  # 调试时取消注释
     main()

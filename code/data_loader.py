@@ -200,12 +200,8 @@ def load_data():
     print(f"Face features: {np.array(face_features).shape} (names: {len(face_feature_names)})")
     
     return (
-        subject_ids, 
-        acoustic_features, 
-        motion_features, 
-        face_features, 
+        subject_ids,
+        (acoustic_features, motion_features, face_features),  
         labels,
-        acoustic_feature_names,
-        motion_feature_names,
-        face_feature_names
+        (acoustic_feature_names, motion_feature_names, face_feature_names)  
     )
