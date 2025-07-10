@@ -353,9 +353,14 @@ def main():
     prefix = '/data/Leo/mm/data/Newborn200/data/'
     video_files = glob.glob(prefix + '*.mp4')
     for video_file in video_files:
+        temp = os.path.splitext(video_file)[0] + "_motion_features.json"
+        json_file = temp.replace("Newborn200/data", "Newborn200/NewBody")
+        if os.path.exists(json_file):
+            print(f"JSON file already exists for {video_file}, skipping...")
+            continue
         Generate_Intime_Mask_AVI(
             input_video_path=video_file,
-            segmentation_pipeline=pipeline(Tasks.image_segmentation, 'iic/cv_resnet101_image-multiple-human-parsing', device='cuda:2'),
+            segmentation_pipeline=pipeline(Tasks.image_segmentation, 'iic/cv_resnet101_image-multiple-human-parsing', device='cuda'),
             body_part_colors={
                 'Left-arm': (255, 0, 0, 1),      # Red for left arm
                 'Right-arm': (255, 0, 0, 1),     # Red for right arm

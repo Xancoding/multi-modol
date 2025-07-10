@@ -60,8 +60,8 @@ def body_features(input_path: str, window_size_sec: float, step_size_sec: float,
     # 获取特征计算器
     feature_calculators = get_feature_calculators(fps)
     feature_keys = ['Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg'] # 局部肢体
-    # feature_keys = ['WholeFrameMotion'] # 完整画面
     # feature_keys = ['WholeBody'] # 人体整体
+    # feature_keys = ['WholeFrameMotion'] # 完整画面
 
     feature_names = [
         f"{key}_{name}" for key in feature_keys 

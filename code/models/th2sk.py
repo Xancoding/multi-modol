@@ -8,18 +8,18 @@ from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 from sklearn.utils.multiclass import unique_labels
 import numpy as np
 import config
+from tqdm import tqdm
 
-class PyTorchClassifier(BaseEstimator, ClassifierMixin):
+class PyTorchToSklearn(BaseEstimator, ClassifierMixin):
     """将PyTorch模型包装成sklearn兼容的格式"""
     def __init__(self, model_class, epochs=config.max_epochs, batch_size=config.batch_size, 
                  learning_rate=config.learning_rate, device='cuda' if torch.cuda.is_available() else 'cpu',
-                 class_weight=None, random_state=config.seed):
+                 random_state=config.seed):
         self.model_class = model_class
         self.epochs = epochs
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.device = device
-        self.class_weight = class_weight
         self.random_state = random_state
         
         # 设置随机种子
@@ -50,24 +50,23 @@ class PyTorchClassifier(BaseEstimator, ClassifierMixin):
         num_classes = len(self.classes_)
         self.model_ = self.model_class(input_size, num_classes).to(self.device)
         
-        # 定义损失函数（支持类别权重）
-        if self.class_weight is not None:
-            weight = torch.FloatTensor(self.class_weight).to(self.device)
-            criterion = nn.CrossEntropyLoss(weight=weight)
-        else:
-            criterion = nn.CrossEntropyLoss()
+
+        criterion = nn.CrossEntropyLoss()
             
         optimizer = optim.Adam(self.model_.parameters(), lr=self.learning_rate)
         
-        # 训练循环
-        self.model_.train()
-        for epoch in range(self.epochs):
-            for batch_X, batch_y in loader:
+        # 使用tqdm显示epoch进度条
+        for epoch in tqdm(range(self.epochs), desc="Training epochs"):
+            batch_losses = []
+            # 使用tqdm显示batch进度条
+            for batch_X, batch_y in tqdm(loader, desc=f"Epoch {epoch+1}", leave=False):
                 optimizer.zero_grad()
                 outputs = self.model_(batch_X)
                 loss = criterion(outputs, batch_y)
                 loss.backward()
                 optimizer.step()
+                batch_losses.append(loss.item())
+                tqdm._instances.clear()  # 防止进度条堆积
                 
         return self
     

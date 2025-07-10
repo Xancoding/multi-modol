@@ -34,7 +34,7 @@ def get_label_file_path(dataDir):
 
 def get_motion_feature_file_path(dataDir):
     """获取运动特征文件路径"""
-    base_name, new_parent = prepare_feature_output_path(dataDir, "Body")
+    base_name, new_parent = prepare_feature_output_path(dataDir, "NewBody")
     return os.path.join(new_parent, f"{base_name}_motion_features.json")
 
 def get_face_landmark_file_path(dataDir):
