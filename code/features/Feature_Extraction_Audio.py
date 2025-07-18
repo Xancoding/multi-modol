@@ -15,7 +15,6 @@ import pickle
 import os
 import librosa
 import utils
-from typing import List, Tuple
 
 
 eps = sys.float_info.epsilon
@@ -732,20 +731,17 @@ def acoustic_features_and_spectrogram(audioData):
     acoustic_feature = np.array(feature_List)
     return acoustic_feature, feature_names
 
+def extract_raw_acoustic_features(dataDir):
+    labelDir = utils.get_label_file_path(dataDir)
+    sample = NICUWav2Segments(dataDir, labelDir)
+    audioData = sample["data"]
+    
+    feature_List = []
+    for i in range(audioData.shape[0]):
+        features, feature_names = feature_extraction(signal=audioData[i], sampling_rate=config.audioSampleRate,
+                                                     window=config.FFTwindow, step=config.FFTOverlap, deltas=False)
+    
+        feature_List.append(features)
+    acoustic_feature = np.array(feature_List)
 
-    # # Feature extraction for Spectrogram
-    # feature_List = []
-    # for i in range(audioData.shape[0]):
-    #     # 归一化
-    #     sig_array_norm = dc_normalize(audioData[i])
-
-    #     # spectrogram
-    #     spectrogram_feature, time_axis, freq_axis = spectrogram(signal=sig_array_norm,
-    #                                                     sampling_rate=config.audioSampleRate,
-    #                                                     window=config.FFTwindow, step=config.FFTOverlap,
-    #                                                     plot=False, show_progress=False)
-    #     spectrogram_feature = (spectrogram_feature - spectrogram_feature.min()) / (spectrogram_feature.max() - spectrogram_feature.min() + 1e-10)
-    #     feature_List.append(spectrogram_feature)
-
-    # spectrogram_feature = np.array(feature_List)
-    # return acoustic_feature, spectrogram_feature, feature_names
+    return acoustic_feature, sample["label"], feature_names

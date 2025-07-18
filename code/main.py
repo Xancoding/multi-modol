@@ -43,7 +43,8 @@ def run_evaluations(evaluator, features, labels, subject_ids, model_type):
     Returns multimodal importances for feature importance analysis.
     """
     # Unpack features for clarity
-    acoustic, motion, face = features[0], features[1], features[2]
+    acoustic, motion, face, correlation = features[0], features[1], features[2], features[3]
+    # combined_features = (acoustic, motion, face, correlation)
     combined_features = (acoustic, motion, face)
     # combined_features = (motion, face)
     
@@ -73,44 +74,50 @@ def run_evaluations(evaluator, features, labels, subject_ids, model_type):
     #     subject_ids, model_type, model_type, model_type
     # )
 
-    # # 4. Feature-level fusion evaluation
-    # multimodal_importances = evaluator.evaluate_feature_combination(
-    #     combined_features, 
-    #     labels, "Multimodal-Feature Level Fusion (Concatenation)", subject_ids, model_type
-    # )
-    
-    # # 6. Adaptive fusion evaluation
-    evaluator.evaluate_adaptive_multimodal_fusion(
+    # 4. Feature-level fusion evaluation
+    multimodal_importances = evaluator.evaluate_feature_combination(
         combined_features, 
-        labels, "Adaptive Fusion Strategy", 
-        subject_ids, model_type, model_type
+        labels, "Multimodal-Feature Level Fusion (Concatenation)", subject_ids, model_type,
     )
+    
+    # # 6. Conditional fusion evaluation
+    # evaluator.evaluate_conditional_fusion(
+    #     combined_features, 
+    #     labels, 
+    #     "Multimodal-Conditional Fusion (Entropy Thresholding)",
+    #     subject_ids, 
+    #     model_type, 
+    #     model_type, 
+    # )
 
 
-    # return multimodal_importances
-    return None
+    return multimodal_importances
+    # return None
 
 def main():
     """Main experiment function"""
+    ex_test = False
+    is_print = False
     utils.initialize_random_seed(config.seed)
     
     # Load all data
-    (subject_ids, features, labels, feature_names) = load_data()
+    (subject_ids, features, labels, feature_names) = load_data(ex_test)
 
     # Select test cases
     easy_cases, hard_cases = select_test_cases(subject_ids,
                                                config.hard_cases_num, 
                                                config.easy_cases_num)
+
     
     # Initialize evaluator
-    # evaluator = ModelEvaluator()
-    evaluator = ModelEvaluator(easy_cases, hard_cases)
+    evaluator = ModelEvaluator(ex_test=ex_test)
+    # evaluator = ModelEvaluator(easy_cases, hard_cases)
 
     
     # Run evaluations (comment out methods in run_evaluations as needed)
     multimodal_importances = run_evaluations(
         evaluator, 
-        features[:3],  # acoustic, motion, face features
+        features[:],  # acoustic, motion, face, correlation
         labels,
         subject_ids,
         config.model_type
@@ -118,14 +125,13 @@ def main():
     
     print("\n=== Evaluation Complete ===")
     
-    # # Print feature importance if applicable
-    # if config.model_type in ['xgb', 'lgbm', 'rf']:
-    #     print_top_features(
-    #         sum(feature_names[:3], []),  # Combine all feature names
-    #         multimodal_importances, 
-    #         "多模态", 
-    #         top_n=20
-    #     )
+    if config.model_type in ['xgb', 'lgbm', 'rf'] and is_print:
+        print_top_features(
+            sum(feature_names[:], []),  # Combine all feature names
+            multimodal_importances, 
+            "多模态", 
+            top_n=30
+        )
 
 if __name__ == "__main__":
     main()

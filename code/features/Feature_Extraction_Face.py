@@ -2,6 +2,7 @@ import numpy as np
 from typing import List, Dict, Tuple, Callable
 from math import isnan
 import utils
+import config
 
 def calculate_mar(landmarks: List[List[float]]) -> float:
     """计算嘴部纵横比(Mouth Aspect Ratio)"""
@@ -156,18 +157,33 @@ def facial_features(input_path: str, window_size_sec: float, step_size_sec: floa
         return np.zeros((0, n_features)), [name for name, _ in get_facial_feature_calculators()], []
     
 
-# 使用示例
-if __name__ == "__main__":
-    prefix = '/data/Leo/mm/data/Newborn200/'
-    input_json = prefix + "Face/50cm3.24kg_face_landmarks.json"
-    label_file = prefix + "Label/50cm3.24kg.txt"    
+def extract_raw_face_features(dataDir):
+    file = utils.get_face_landmark_file_path(dataDir)
+    labelDir = utils.get_label_file_path(dataDir)
     
-    features, names, meta = facial_features(
-        input_path=input_json,
-        window_size_sec=2.5,
-        step_size_sec=2.5,
-        label_path=label_file
-    )
-    print(f"特征矩阵形状: {features.shape}")
-    print(f"特征名称: {names}")
-    print(f"窗口元数据: {meta[:5]}")  # 打印前5个窗口的元数据
+    data = utils.load_and_validate_json(file)
+    frames = data.get('frames', [])
+    fps = data['video_info']['fps']
+    
+    min_start_time, max_end_time = utils.get_valid_time_range(labelDir)
+    frames = utils.crop_data_by_time(frames, fps, min_start_time, max_end_time)
+    
+    window_size, step_size = utils.calculate_window_params(fps, config.slidingWindows, config.step)
+    valid_indices = np.arange(0, len(frames) - window_size + 1, step_size)
+
+    feature_names = ['mars', 'left_ears', 'right_ears']
+    feature_List = []
+    for i, start in enumerate(valid_indices):
+        end = start + window_size
+        
+        window_data = frames[start:end]
+        feature_dict = extract_facial_features(window_data)    
+        feature_values = []
+        for name in feature_names:
+            if name in feature_dict:  
+                feature_values.append(feature_dict[name])
+
+        feature_List.append(np.array(feature_values))
+    face_features = np.array(feature_List)
+
+    return face_features, feature_names

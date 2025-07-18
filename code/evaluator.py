@@ -20,29 +20,31 @@ from torch.utils.data.sampler import WeightedRandomSampler
 import config
 from data_loader import FeatureDataset, compute_class_weights
 
-from models.th2sk import PyTorchToSklearn
-from models.feature_attention import FeatureAttentionModel
-
 import random
 import torch
 
+from sklearn.feature_selection import VarianceThreshold # <-- 新增导入
+
+
 class ModelEvaluator:
     """统一管理模型评估流程，支持两种数据划分方式"""    
-    def __init__(self, easy_subjects=None, hard_subjects=None):
+    def __init__(self, easy_subjects=None, hard_subjects=None, ex_test=False):
         self._set_random_seeds(config.seed)
         self.easy_subjects = easy_subjects
         self.hard_subjects = hard_subjects
         self.test_subjects = easy_subjects + hard_subjects if easy_subjects and hard_subjects else None
+        if ex_test:
+            self.test_subjects = ['01', '02', '03', '04', '05']
         self.cross_validator = StratifiedGroupKFold(n_splits=config.n_splits, shuffle=True, random_state=config.seed)
-        
+        self.ex_test = ex_test
+
         self.model_configs = {
             'svm': {'class': SVC, 'params': {'kernel': 'rbf', 'C': 1.0, 'gamma': 'scale', 
-                    'class_weight': 'balanced', 'probability': True, 'random_state': config.seed}},
+                                              'class_weight': 'balanced', 'probability': True, 'random_state': config.seed}},
             'rf': {'class': RandomForestClassifier, 'params': {'n_estimators': 100, 
-                'class_weight': 'balanced', 'random_state': config.seed}},
+                                                            'class_weight': 'balanced', 'random_state': config.seed}},
             'lgbm': {'class': LGBMClassifier, 'params': {'class_weight': 'balanced', 
-                    'n_estimators': 100, 'verbosity': -1, 'random_state': config.seed}},
-            'feat_attention': {'class': lambda **kwargs: PyTorchToSklearn(model_class=FeatureAttentionModel, **kwargs), 'params':{}},            
+                                                        'n_estimators': 100, 'verbosity': -1, 'random_state': config.seed}},
         }
 
     def _set_random_seeds(self, seed):
@@ -129,20 +131,32 @@ class ModelEvaluator:
         print(f"\n=== Evaluating {method_name} ({model_architecture}) ===")
         model = self.create_model(model_architecture)
         X, y, groups = self._prepare_features(feature_data), np.array(target_labels), np.array(subject_ids)
-        
+        print(f"Original feature dimension: {X.shape[1]}")
+
         if self.test_subjects:
             train_mask = self._split_data_by_subjects(groups)
             model, scaler = self._train_model(X[train_mask], y[train_mask], model)
             
-            for test_name, test_subjects in {'easy': self.easy_subjects, 'hard': self.hard_subjects, 'all': self.test_subjects}.items():
-                test_mask = np.isin(groups, test_subjects)
-                if sum(test_mask) == 0:
-                    print(f"警告：{test_name}测试集为空")
-                    continue
-                
-                metrics = self._evaluate_model(model, scaler, X[test_mask], y[test_mask])
-                print(f"\n{test_name.capitalize()} Test Metrics:")
-                self._print_metrics(metrics)
+            if self.ex_test:
+                # test_mask = np.isin(groups, self.test_subjects)
+                # metrics = self._evaluate_model(model, scaler, X[test_mask], y[test_mask])
+                # print(f"\n Test Metrics:")
+                # self._print_metrics(metrics) 
+                for idx, subjects in enumerate(self.test_subjects):
+                    test_mask = np.isin(groups, subjects)
+                    y_pred = model.predict(scaler.transform(X[test_mask]))
+                    correct = (y_pred == y[test_mask]).sum().item()
+                    total = test_mask.sum().item()
+                    print(f"{subjects}:{correct}/{total}")
+                    print("Predict:", y_pred)  # 打印模型预测结果
+                    print("Label:", y[test_mask])  # 打印真实标签
+            else:
+                for test_name, test_subjects in {'easy': self.easy_subjects, 'hard': self.hard_subjects, 'all': self.test_subjects}.items():
+                    test_mask = np.isin(groups, test_subjects)
+                    
+                    metrics = self._evaluate_model(model, scaler, X[test_mask], y[test_mask])
+                    print(f"\n{test_name.capitalize()} Test Metrics:")
+                    self._print_metrics(metrics)                
 
             if model_architecture.lower() in ['rf', 'lgbm']:
                 return model.feature_importances_ / np.sum(model.feature_importances_)
@@ -237,100 +251,122 @@ class ModelEvaluator:
             avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
             self._print_metrics(avg_metrics)
             return avg_metrics
-        
-    def evaluate_adaptive_multimodal_fusion(self, feature_data, target_labels, method_name, subject_ids, motion_face_model, all_modality_model, confidence_threshold=0.90):
-        print(f"\n=== Evaluating {method_name} (Adaptive Fusion with Confidence Threshold) ===")
+
+    def _calculate_entropy(self, probabilities):
+        """计算给定概率分布的熵。"""
+        # 避免log(0)
+        probabilities = np.clip(probabilities, 1e-9, 1 - 1e-9)
+        return -np.sum(probabilities * np.log2(probabilities), axis=1)
+
+    def evaluate_conditional_fusion(self, feature_data, target_labels, method_name, subject_ids, 
+                                    model_A_arch, model_B_arch):
+        print(f"\n=== Evaluating Conditional Fusion ({method_name}) ===")
+        print(f"  Model A (Audio+Motion+Face): {model_A_arch}, Model B (Motion+Face): {model_B_arch}")
+
         X_audio = self._prepare_features(feature_data[0])
         X_motion = self._prepare_features(feature_data[1])
         X_face = self._prepare_features(feature_data[2])
+        
+        # New: Prepare X for Model A (audio + motion + face)
+        X_all_modalities = self._prepare_features((X_audio, X_motion, X_face)) 
+        
+        # X for Model B (motion + face) remains the same
+        X_motion_face = self._prepare_features((X_motion, X_face)) 
+        
         y = np.array(target_labels)
         groups = np.array(subject_ids)
 
-        # 确保用于初步判断的模型支持概率输出
-        if motion_face_model.lower() == 'svm':
-            if 'probability' not in self.model_configs['svm']['params'] or not self.model_configs['svm']['params']['probability']:
-                print(f"Warning: SVC model for '{motion_face_model}' will be forced to have 'probability=True' for confidence-based adaptive fusion.")
-                self.model_configs['svm']['params']['probability'] = True
-        elif motion_face_model.lower() not in ['rf', 'lgbm', 'cnn', 'feat_attention']:
-            print(f"Warning: Model '{motion_face_model}' may not natively support predict_proba. CalibratedClassifierCV will be used.")
-
-        def train_adaptive_fold(train_idx):
-            # Train motion + face model (preliminary doctor)
-            X_train_mf = np.concatenate([X_motion[train_idx], X_face[train_idx]], axis=1)
-            y_train = y[train_idx]
+        def train_conditional_models(train_idx):
+            # Train Model A (All Modalities: Audio + Motion + Face)
+            model_A = self.create_model(model_A_arch)
+            if not hasattr(model_A, 'predict_proba'):
+                model_A = CalibratedClassifierCV(model_A, cv=3, method='isotonic' if model_A_arch == 'svm' else 'sigmoid')
             
-            model_mf = self.create_model(motion_face_model)
-            if motion_face_model.lower() in ['svm']:
-                pass
-            elif motion_face_model.lower() in ['knn']:
-                model_mf = CalibratedClassifierCV(model_mf, cv=3, method='sigmoid')
+            model_A, scaler_A = self._train_model(X_all_modalities[train_idx], y[train_idx], model_A)
+
+            # Train Model B (Motion + Face)
+            model_B = self.create_model(model_B_arch)
+            if not hasattr(model_B, 'predict_proba'):
+                model_B = CalibratedClassifierCV(model_B, cv=3, method='isotonic' if model_B_arch == 'svm' else 'sigmoid')
             
-            model_mf, scaler_mf = self._train_model(X_train_mf, y_train, model_mf)
-
-            # Train all modalities model (comprehensive doctor)
-            X_train_all = np.concatenate([X_audio[train_idx], X_motion[train_idx], X_face[train_idx]], axis=1)
-            model_all = self.create_model(all_modality_model)
-            if all_modality_model.lower() in ['svm']:
-                pass
-            elif all_modality_model.lower() in ['knn']:
-                model_all = CalibratedClassifierCV(model_all, cv=3, method='sigmoid')
-
-            model_all, scaler_all = self._train_model(X_train_all, y_train, model_all)
+            model_B, scaler_B = self._train_model(X_motion_face[train_idx], y[train_idx], model_B)
             
-            return {'model_mf': model_mf, 'scaler_mf': scaler_mf, 
-                    'model_all': model_all, 'scaler_all': scaler_all}
+            return {
+                'model_A': model_A, 'scaler_A': scaler_A,
+                'model_B': model_B, 'scaler_B': scaler_B
+            }
 
-        def evaluate_adaptive_fold(test_idx, trained_models, alpha=1): # 增加一个 alpha 参数作为初步模型的权重
+        def evaluate_conditional_models(test_idx, trained_models):
+            model_A = trained_models['model_A']
+            scaler_A = trained_models['scaler_A']
+            model_B = trained_models['model_B']
+            scaler_B = trained_models['scaler_B']
+
+            # Prepare test data for Model A (All Modalities)
+            X_all_modalities_test = scaler_A.transform(X_all_modalities[test_idx])
+            # Prepare test data for Model B (Motion + Face)
+            X_motion_face_test = scaler_B.transform(X_motion_face[test_idx])
+            
             y_true_fold = y[test_idx]
 
-            # Prepare test data for Motion + Face model
-            X_test_mf_combined = np.concatenate([X_motion[test_idx], X_face[test_idx]], axis=1)
-            X_test_mf_scaled = trained_models['scaler_mf'].transform(X_test_mf_combined)
+            # Get probabilities from Model A (All Modalities)
+            proba_A = model_A.predict_proba(X_all_modalities_test)
+            entropy_A = self._calculate_entropy(proba_A) # Entropy for Model A
 
-            # Get probabilities from the preliminary doctor (Motion + Face)
-            # 确保这个模型能输出概率，且概率已校准
-            y_proba_mf = trained_models['model_mf'].predict_proba(X_test_mf_scaled)
+            # Get probabilities from Model B (Motion + Face)
+            proba_B = model_B.predict_proba(X_motion_face_test)
+            entropy_B = self._calculate_entropy(proba_B) # Entropy for Model B
 
-            # Prepare test data for All Modalities model
-            X_test_all_combined = np.concatenate([X_audio[test_idx], X_motion[test_idx], X_face[test_idx]], axis=1)
-            X_test_all_scaled = trained_models['scaler_all'].transform(X_test_all_combined)
+            # Get predictions from Model A and Model B
+            pred_A = model_A.predict(X_all_modalities_test)
+            pred_B = model_B.predict(X_motion_face_test)
 
-            # Get probabilities from the comprehensive doctor (All Modalities)
-            # 确保这个模型能输出概率，且概率已校准
-            y_proba_all = trained_models['model_all'].predict_proba(X_test_all_scaled)
+            # Initialize final predictions
+            y_pred_final = np.empty_like(pred_A) # Create an empty array to fill
 
-            # Perform weighted average fusion
-            # alpha 是 Motion+Face 模型的权重
-            # (1 - alpha) 是 All Modalities 模型的权重
-            # 你需要根据你的实验结论调整 alpha 的值
-            # 例如，如果 Motion+Face 在困难样本上表现更好，可以给它更高的权重，尤其是在它预测为1的时候
-            # 这里是一个简单的固定权重示例
-            fused_proba = alpha * y_proba_mf + (1 - alpha) * y_proba_all
+            # Apply new conditional logic: choose the prediction with lower entropy
+            # This creates a boolean mask where True means Model B's entropy is lower
+            choose_model_B_mask = entropy_B < entropy_A
 
-            # Final prediction based on the fused probabilities
-            final_predictions = np.argmax(fused_proba, axis=1)
-
-            return self._compute_metrics(y_true_fold, final_predictions)
+            # Where Model B's entropy is lower, use Model B's prediction
+            y_pred_final[choose_model_B_mask] = pred_B[choose_model_B_mask]
+            # Otherwise (where Model A's entropy is lower or equal), use Model A's prediction
+            y_pred_final[~choose_model_B_mask] = pred_A[~choose_model_B_mask]
+            
+            return self._compute_metrics(y_true_fold, y_pred_final)
+        
 
         if self.test_subjects:
             train_mask = self._split_data_by_subjects(groups)
-            trained_models = train_adaptive_fold(train_mask)
+            trained_models = train_conditional_models(train_mask)
             
-            for test_name, test_subjects in {'easy': self.easy_subjects, 'hard': self.hard_subjects, 'all': self.test_subjects}.items():
-                test_mask = np.isin(groups, test_subjects)
-                if sum(test_mask) == 0:
-                    print(f"警告：{test_name}测试集为空")
-                    continue
-                
-                metrics = evaluate_adaptive_fold(test_mask, trained_models)
-                print(f"\n{test_name.capitalize()} Test Metrics:")
-                self._print_metrics(metrics)
-            return metrics
+            if self.ex_test:
+                test_mask = np.isin(groups, self.test_subjects)
+                metrics = evaluate_conditional_models(test_mask, trained_models)
+                print(f"\n Test Metrics:")
+                self._print_metrics(metrics) 
+                # for idx, subjects in enumerate(self.test_subjects):
+                #     test_mask = np.isin(groups, subjects)
+                #     y_pred = model.predict(scaler.transform(X[test_mask]))
+                #     print(subjects)
+                #     print("Predict:", y_pred)  # 打印模型预测结果
+                #     print("Label:", y[test_mask])  # 打印真实标签
+            else:            
+                for test_name, test_subjects in {'easy': self.easy_subjects, 'hard': self.hard_subjects, 'all': self.test_subjects}.items():
+                    test_mask = np.isin(groups, test_subjects)
+                    if sum(test_mask) == 0:
+                        print(f"警告：{test_name}测试集为空")
+                        continue
+                    
+                    metrics = evaluate_conditional_models(test_mask, trained_models)
+                    print(f"\n{test_name.capitalize()} Test Metrics:")
+                    self._print_metrics(metrics)
+                return metrics
         else:
             metrics = {k: [] for k in ['accuracy', 'precision', 'recall', 'f1-score']}
             for train_idx, test_idx in tqdm(self.cross_validator.split(X_audio, y, groups), total=config.n_splits, desc=f"{method_name}"):
-                trained_models = train_adaptive_fold(train_idx)
-                fold_metrics = evaluate_adaptive_fold(test_idx, trained_models)
+                trained_models = train_conditional_models(train_idx)
+                fold_metrics = evaluate_conditional_models(test_idx, trained_models)
                 for k in metrics: metrics[k].append(fold_metrics[k])
             
             avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
