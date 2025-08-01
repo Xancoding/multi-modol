@@ -23,9 +23,6 @@ from data_loader import FeatureDataset, compute_class_weights
 import random
 import torch
 
-from sklearn.feature_selection import VarianceThreshold # <-- 新增导入
-
-
 class ModelEvaluator:
     """统一管理模型评估流程，支持两种数据划分方式"""    
     def __init__(self, easy_subjects=None, hard_subjects=None, ex_test=False):
@@ -165,6 +162,7 @@ class ModelEvaluator:
         else:
             importance = []
             metrics = {k: [] for k in ['precision', 'recall', 'f1-score', 'accuracy']}
+            groups = [group.split('_')[0] for group in groups]
             for train_idx, test_idx in tqdm(self.cross_validator.split(X, y, groups), total=config.n_splits, desc=f"{method_name} ({model_architecture})"):
                 model, scaler = self._train_model(X[train_idx], y[train_idx], model)
                 fold_metrics = self._evaluate_model(model, scaler, X[test_idx], y[test_idx])
@@ -243,6 +241,7 @@ class ModelEvaluator:
             return metrics
         else:
             metrics = {k: [] for k in ['accuracy', 'precision', 'recall', 'f1-score']}
+            groups = [group.split('_')[0] for group in groups]
             for train_idx, test_idx in tqdm(self.cross_validator.split(X_audio, y, groups), total=config.n_splits, desc=f"{method_name}"):
                 trained_models = train_fold(train_idx)
                 fold_metrics = evaluate_fold(test_idx, trained_models)

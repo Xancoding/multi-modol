@@ -16,7 +16,6 @@ from features.Feature_Extraction_Body import body_features, extract_raw_motion_f
 from features.Feature_Extraction_Face import facial_features, extract_raw_face_features
 import config
 import utils
-from Feature_Correlation import down_sample, create_cross_modality_correlation
 
 class FeatureDataset(Dataset):
     """PyTorch Dataset for features"""
@@ -60,7 +59,8 @@ def extract_facial_features(dataDir):
 
 def load_or_extract_features(wav_files):
     """加载或提取特征数据（包含名称）"""
-    feature_dir = '/data/Leo/mm/data/Newborn200/Features'
+    dir = os.path.dirname(wav_files[0])
+    feature_dir = os.path.join(os.path.dirname(dir), 'Features')
     os.makedirs(feature_dir, exist_ok=True)
     subject_data = {}
     
@@ -79,8 +79,6 @@ def load_or_extract_features(wav_files):
                     'acoustic_feature_names': data['acoustic_feature_names'].tolist(),
                     'motion_feature_names': data['motion_feature_names'].tolist(),
                     'face_feature_names': data['face_feature_names'].tolist(),
-                    'correlation': data['correlation'],
-                    'correlation_feature_names': data['correlation_feature_names'].tolist()
                 })
                 continue
             except Exception as e:
@@ -89,32 +87,7 @@ def load_or_extract_features(wav_files):
         # 提取新特征（确保名称被捕获）
         acoustic_feat, label, audio_names = extract_audio_features(file)
         motion_feat, motion_names = extract_body_motion_features(file)
-        face_feat, face_names = extract_facial_features(file)
-
-        raw_motion_feat, raw_motion_names = extract_raw_motion_features(file)
-        raw_face_feat, raw_face_names = extract_raw_face_features(file)
-        raw_acoustic_feat, _, raw_audio_names = extract_raw_acoustic_features(file)
-        target_time_dim = raw_motion_feat.shape[2]
-        raw_acoustic_feat = down_sample(raw_acoustic_feat, target_time_dim)
-        audio_motion_corr_2d, audio_motion_corr_names = create_cross_modality_correlation(
-            raw_acoustic_feat, raw_audio_names, raw_motion_feat, raw_motion_names, "Audio", "Motion"
-        )
-        audio_face_corr_2d, audio_face_corr_names = create_cross_modality_correlation(
-            raw_acoustic_feat, raw_audio_names, raw_face_feat, raw_face_names, "Audio", "Facial"
-        )
-        # motion_face_corr_2d, motion_face_corr_names = create_cross_modality_correlation(
-        #     raw_motion_feat, raw_motion_names, raw_face_feat, raw_face_names, "Motion", "Facial"
-        # )   
-        correlation_feat = np.concatenate([
-            audio_motion_corr_2d,
-            audio_face_corr_2d,
-            # motion_face_corr_2d
-        ], axis=1)
-        correlation_names = (
-            audio_motion_corr_names +
-            audio_face_corr_names 
-            # + motion_face_corr_names
-        )           
+        face_feat, face_names = extract_facial_features(file)       
 
         np.savez(
             feature_path,
@@ -125,8 +98,6 @@ def load_or_extract_features(wav_files):
             acoustic_feature_names=audio_names,
             motion_feature_names=motion_names,
             face_feature_names=face_names,
-            correlation=correlation_feat,
-            correlation_feature_names=correlation_names
         )
 
         subject_data.setdefault(utils.extract_subject_id(file), []).append({
@@ -137,8 +108,6 @@ def load_or_extract_features(wav_files):
             'acoustic_feature_names': audio_names,
             'motion_feature_names': motion_names,
             'face_feature_names': face_names,
-            'correlation': correlation_feat,
-            'correlation_feature_names': correlation_names
         })
     
     return subject_data
@@ -149,7 +118,6 @@ def prepare_feature_matrices(subject_data):
     all_acoustic = []
     all_motion = []
     all_face = []
-    all_correlation = []  # 新增：存储correlation特征
     all_labels = []
     all_subject_ids = []
 
@@ -158,20 +126,27 @@ def prepare_feature_matrices(subject_data):
     acoustic_feature_names = first_sample.get('acoustic_feature_names', None)
     motion_feature_names = first_sample.get('motion_feature_names', None)
     face_feature_names = first_sample.get('face_feature_names', None)
-    correlation_feature_names = first_sample.get('correlation_feature_names', None)  # 新增
 
-    if None in [acoustic_feature_names, motion_feature_names, face_feature_names, correlation_feature_names]:
+    if None in [acoustic_feature_names, motion_feature_names, face_feature_names]:
         raise ValueError("特征名称未正确加载！请检查特征提取函数") 
     
-    # 统计婴儿哭闹情况
+    # 统计婴儿哭闹情况（基于基本ID）
     crying_infants = set()
     non_crying_infants = set()
+    infant_status = {}  # 记录每个基本ID是否有哭泣
     
     # 统计片段哭闹情况
     crying_segments = 0
     non_crying_segments = 0
     
-    for subj_id, samples in tqdm(subject_data.items(), desc="Processing subjects"):
+    for subj_id_with_timestamp, samples in tqdm(subject_data.items(), desc="Processing subjects"):
+        # 提取基本婴儿ID（去掉时间戳部分）
+        base_subj_id = subj_id_with_timestamp.split('_')[0]
+        
+        # 初始化婴儿状态（如果尚未记录）
+        if base_subj_id not in infant_status:
+            infant_status[base_subj_id] = False
+        
         has_crying = False
         for sample in samples:
             n_frames = len(sample['label'])
@@ -183,22 +158,27 @@ def prepare_feature_matrices(subject_data):
                 else:
                     non_crying_segments += 1
                 
-                # 添加各模态特征
+                # 添加各模态特征（保持原始ID）
                 all_acoustic.append(sample['acoustic'][i])
                 all_motion.append(sample['motion'][i])
                 all_face.append(sample['face'][i])
-                all_correlation.append(sample['correlation'][i])  # 新增
                 all_labels.append(label)
-                all_subject_ids.append(subj_id)
+                all_subject_ids.append(subj_id_with_timestamp)
         
+        # 更新婴儿状态
         if has_crying:
-            crying_infants.add(subj_id)
+            infant_status[base_subj_id] = True
+    
+    # 根据基本ID统计婴儿数量
+    for base_subj_id, has_cried in infant_status.items():
+        if has_cried:
+            crying_infants.add(base_subj_id)
         else:
-            non_crying_infants.add(subj_id)
+            non_crying_infants.add(base_subj_id)
     
     # 打印统计信息
     print("\n=== 数据统计 ===")
-    print(f"婴儿总数: {len(subject_data)}")
+    print(f"婴儿总数: {len(infant_status)}")  # 基于基本ID的数量
     print(f"哭泣的婴儿数量: {len(crying_infants)}")
     print(f"未哭泣的婴儿数量: {len(non_crying_infants)}")
     print(f"\n片段总数: {len(all_labels)}")
@@ -211,37 +191,51 @@ def prepare_feature_matrices(subject_data):
     print(f"音频特征维度: {len(acoustic_feature_names)}")
     print(f"运动特征维度: {len(motion_feature_names)}")
     print(f"面部特征维度: {len(face_feature_names)}")
-    print(f"相关性特征维度: {len(correlation_feature_names)}")  # 新增
     
     return (
         all_subject_ids, 
         all_acoustic, 
         all_motion, 
         all_face, 
-        all_correlation,  # 新增
         all_labels,
         acoustic_feature_names,
         motion_feature_names,
         face_feature_names,
-        correlation_feature_names  # 新增
     )
 
 def load_data(ex_test=False):
     """Load and prepare all data"""
-    prefix = '/data/Leo/mm/data/Newborn200/data/'
+    prefix = config.dataDir
     wav_files = glob.glob(f"{prefix}*.wav")
-    if ex_test:
-        excluded_wav_files = [prefix + x + '.wav' for x in 
-                            [
-                                'old02', 'old03', 'old05',
-                            '52cm3.52kg1', '47cm2.74kg', '50cm3.16kg', '50cm3.1kg1', '52cm3.28kg'
-                            ]]
-    else:
-        excluded_wav_files = [prefix + x + '.wav' for x in 
-                            [
-                                'old02', 'old03', 'old05',
-                              '01', '02', '03', '04', '05',                                 
-                            ]]
+    excluded_wav_files = [prefix + x + '.wav' for x in 
+                        [
+                            'hbxd-m_2025-07-29-14-45-40',
+                            'hbxd-m_2025-07-29-15-06-59',
+                            'ydw-baby-f_2025-07-29-13-39-36',
+                            'ysqd-f_2025-07-29-15-32-40',
+                            'whq-baby-m_2025-07-29-11-48-29',
+                            'lj-baby-m_2025-07-29-12-06-14',
+                            'mxt-baby-f_2025-07-29-13-09-45',
+                            'ydw-baby-f_2025-07-29-15-17-50',
+                            'ysqd-f_2025-07-29-16-34-26',
+
+                            # 'hym-baby-f_2025-07-29-13-02-20',
+                            # 'xgx-baby-m_2025-07-29-13-29-54',
+                            # 'hym-baby-f_2025-07-29-15-26-27',
+                            # 'cjyx-f_2025-07-29-16-48-32'
+                        ]]    
+    # if ex_test:
+    #     excluded_wav_files = [prefix + x + '.wav' for x in 
+    #                         [
+    #                             'old02', 'old03', 'old05',
+    #                         '52cm3.52kg1', '47cm2.74kg', '50cm3.16kg', '50cm3.1kg1', '52cm3.28kg'
+    #                         ]]
+    # else:
+    #     excluded_wav_files = [prefix + x + '.wav' for x in 
+    #                         [
+    #                             'old02', 'old03', 'old05',
+    #                           '01', '02', '03', '04', '05', 
+    #                         ]]
     wav_files = [f for f in wav_files if f not in excluded_wav_files]
     
     print(f"Found {len(wav_files)} audio files")
@@ -250,18 +244,17 @@ def load_data(ex_test=False):
     print(f"Total subjects: {len(subject_data)}")
     
     (subject_ids, acoustic_features, motion_features, 
-     face_features, correlation_features, labels, acoustic_feature_names,
-     motion_feature_names, face_feature_names, correlation_feature_names) = prepare_feature_matrices(subject_data)
+     face_features, labels, acoustic_feature_names,
+     motion_feature_names, face_feature_names) = prepare_feature_matrices(subject_data)
     
     print(f"\nFeature dimensions:")
     print(f"Audio features: {np.array(acoustic_features).shape} (names: {len(acoustic_feature_names)})")
     print(f"Motion features: {np.array(motion_features).shape} (names: {len(motion_feature_names)})")
     print(f"Face features: {np.array(face_features).shape} (names: {len(face_feature_names)})")
-    print(f"Correlation features: {np.array(correlation_features).shape} (names: {len(correlation_feature_names)})")
     
     return (
         subject_ids,
-        (acoustic_features, motion_features, face_features, correlation_features),  
+        (acoustic_features, motion_features, face_features,),  
         labels,
-        (acoustic_feature_names, motion_feature_names, face_feature_names, correlation_feature_names)  
+        (acoustic_feature_names, motion_feature_names, face_feature_names)  
     )

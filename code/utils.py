@@ -34,7 +34,7 @@ def get_label_file_path(dataDir):
 
 def get_motion_feature_file_path(dataDir):
     """获取运动特征文件路径"""
-    base_name, new_parent = prepare_feature_output_path(dataDir, "NewBody")
+    base_name, new_parent = prepare_feature_output_path(dataDir, "Body")
     return os.path.join(new_parent, f"{base_name}_motion_features.json")
 
 def get_face_landmark_file_path(dataDir):
@@ -74,6 +74,8 @@ def get_valid_time_range(label_path: str) -> Tuple[float, float]:
 
 def crop_data_by_time(data: list, fps: float, min_start_time: float, max_end_time: float) -> list:
     """根据时间范围裁剪数据"""
+
+
     start_frame = int(min_start_time * fps)
     end_frame = int(max_end_time * fps)
     return data[start_frame:end_frame]

@@ -131,11 +131,22 @@ def generate_visual_mask(frame, part_masks_dict, body_part_colors):
 
 def Generate_Intime_Mask_AVI(input_video_path, segmentation_pipeline, body_part_colors):
     # 创建输出目录
-    # output_dir = os.path.join(os.path.dirname(input_video_path), 'body')
-    # 创建输出目录，在上一层目录下
-    output_dir = os.path.join(os.path.dirname(os.path.dirname(input_video_path)), 'NewBody')
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(input_video_path)), 'Body')
     os.makedirs(output_dir, exist_ok=True)
 
+    # 设置输出文件路径
+    video_name_without_ext = os.path.splitext(os.path.basename(input_video_path))[0]
+    output_json_path = os.path.join(output_dir, f"{video_name_without_ext}_motion_features.json")
+    output_video_path = os.path.join(output_dir, f"{video_name_without_ext}_masked.avi")
+    # 检查输出文件是否已存在
+    if (os.path.exists(output_video_path) and 
+            os.path.exists(output_json_path)):
+            existing_pngs = [f for f in os.listdir(output_dir) 
+                            if f.startswith(f"{video_name_without_ext}_seg_result") and f.endswith('.png')]
+            if existing_pngs:
+                print(f"\n输出文件已存在，跳过处理: {os.path.basename(output_video_path)}")
+                return
+            
     # 读取视频文件
     video_capture = cv2.VideoCapture(input_video_path)
     print(f"Processing video: {input_video_path}")
@@ -158,20 +169,8 @@ def Generate_Intime_Mask_AVI(input_video_path, segmentation_pipeline, body_part_
     }
     
     # 创建高质量视频写入对象
-    video_name_without_ext = os.path.splitext(os.path.basename(input_video_path))[0]
-    output_json_path = os.path.join(output_dir, f"{video_name_without_ext}_motion_features.json")
-    output_video_path = os.path.join(output_dir, f"{video_name_without_ext}_masked.avi")
     video_codec = cv2.VideoWriter_fourcc(*'MJPG')
     video_writer = cv2.VideoWriter(output_video_path, video_codec, fps, (width, height))    
-
-    # # 检查输出文件是否已存在
-    # if (os.path.exists(output_video_path) and 
-    #         os.path.exists(output_json_path)):
-    #         existing_pngs = [f for f in os.listdir(output_dir) 
-    #                         if f.startswith(f"{video_name_without_ext}_seg_result") and f.endswith('.png')]
-    #         if existing_pngs:
-    #             print("Output files already exist. Skipping processing.")
-    #             return
 
     # 进度条初始化
     # total_frames = 120
@@ -350,14 +349,17 @@ def main():
     # video_files = [glob.glob(d) for d in dirs]
     # video_files = [item for sublist in video_files for item in sublist]
 
-    prefix = '/data/Leo/mm/data/Newborn200/data/'
-    video_files = glob.glob(prefix + '*.mp4')
+    # # dataset Newborn200
+    # prefix = '/data/Leo/mm/data/Newborn200/data/'
+    # # video_files = [prefix + x + '.mp4' for x in ['01', '02', '03', '04', '05']]
+    # video_files = glob.glob(prefix + "*.mp4")
+
+    # dataset NICU
+    prefix = "/data/Leo/mm/data/NanfangHospital/data/"
+    # prefix = "/data/Leo/mm/data/ShenzhenUniversityGeneralHospital/data/"
+    video_files = glob.glob(prefix + "*.avi")
+
     for video_file in video_files:
-        temp = os.path.splitext(video_file)[0] + "_motion_features.json"
-        json_file = temp.replace("Newborn200/data", "Newborn200/NewBody")
-        if os.path.exists(json_file):
-            print(f"JSON file already exists for {video_file}, skipping...")
-            continue
         Generate_Intime_Mask_AVI(
             input_video_path=video_file,
             segmentation_pipeline=pipeline(Tasks.image_segmentation, 'iic/cv_resnet101_image-multiple-human-parsing', device='cuda'),

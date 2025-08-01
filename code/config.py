@@ -11,6 +11,11 @@ easy_cases_num = 15  # 易例数量
 # Feature Extraction
 FFTwindow = 256
 FFTOverlap = 128
-MFCCFiliterNum = 26
+MFCCFiliterNum = 26 
 
 model_type = 'lgbm' # 模型类型：'lgbm', 'rf', 'svm'
+
+# dataDir = '/data/Leo/mm/data/NICU/data/'
+dataDir = '/data/Leo/mm/data/Newborn200/data/'
+# dataDir = '/data/Leo/mm/data/ShenzhenUniversityGeneralHospital/data/'
+# dataDir = '/data/Leo/mm/data/NanfangHospital/data/'

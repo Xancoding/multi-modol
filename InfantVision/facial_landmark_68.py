@@ -160,7 +160,6 @@ class FaceAlignmentProcessor:
         # 检查输出文件是否已存在
         if (os.path.exists(output_video_path) and 
             os.path.exists(output_json_path)):
-            # 检查是否有任何PNG文件存在（文件名格式为 {base_name}_face_landmarks_frame*.png）
             existing_pngs = [f for f in os.listdir(output_dir) 
                             if f.startswith(f"{base_name}_face_landmarks_frame") and f.endswith('.png')]
             if existing_pngs:
@@ -243,18 +242,22 @@ class FaceAlignmentProcessor:
 
 def main():
     # 配置路径
-    config_path = '/root/mm/InfAnFace/experiments/300w/hrnet-r90jt.yaml'
+    config_path = '/root/mm/InfantVision/experiments/300w/hrnet-r90jt.yaml'
     model_path = '/data/Leo/mm/models/hrnet-r90jt.pth'
     
     # 初始化处理器
     processor = FaceAlignmentProcessor(config_path, model_path)
-    
-    # 处理视频文件
-    # prefix = "/data/Leo/mm/data/raw_data/NanfangHospital/cry/zzy-baby-m/"
-    # video_files = glob.glob(prefix + "*cam0.avi")
 
-    prefix = '/data/Leo/mm/data/Newborn200/data/'
-    video_files = glob.glob(prefix + "*.mp4")
+    # # dataset Newborn200
+    # prefix = '/data/Leo/mm/data/Newborn200/data/'
+    # # video_files = [prefix + x + '.mp4' for x in ['01', '02', '03', '04', '05']]
+    # video_files = glob.glob(prefix + "*.mp4")
+
+    # dataset NICU
+    # prefix = "/data/Leo/mm/data/ShenzhenUniversityGeneralHospital/data/"
+    prefix = "/data/Leo/mm/data/NanfangHospital/data/"
+    video_files = glob.glob(prefix + "*.avi")
+
     for video_file in video_files:
         processor.process_video(video_file)
 

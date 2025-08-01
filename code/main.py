@@ -43,8 +43,7 @@ def run_evaluations(evaluator, features, labels, subject_ids, model_type):
     Returns multimodal importances for feature importance analysis.
     """
     # Unpack features for clarity
-    acoustic, motion, face, correlation = features[0], features[1], features[2], features[3]
-    # combined_features = (acoustic, motion, face, correlation)
+    acoustic, motion, face = features[0], features[1], features[2]
     combined_features = (acoustic, motion, face)
     # combined_features = (motion, face)
     
@@ -52,20 +51,20 @@ def run_evaluations(evaluator, features, labels, subject_ids, model_type):
     # Evaluation Methods (Comment/uncomment as needed)
     # ======================================================
     
-    # # 1. Audio modality evaluation
-    # evaluator.evaluate_feature_combination(
-    #     acoustic, labels, "Audio", subject_ids, model_type
-    # )
+    # 1. Audio modality evaluation
+    evaluator.evaluate_feature_combination(
+        acoustic, labels, "Audio", subject_ids, model_type
+    )
 
-    # # 2. Motion modality evaluation
-    # evaluator.evaluate_feature_combination(
-    #     motion, labels, "Motion", subject_ids, model_type
-    # )
+    # 2. Motion modality evaluation
+    evaluator.evaluate_feature_combination(
+        motion, labels, "Motion", subject_ids, model_type
+    )
     
-    # # 3. Face modality evaluation
-    # evaluator.evaluate_feature_combination(
-    #     face, labels, "Face", subject_ids, model_type
-    # )
+    # 3. Face modality evaluation
+    evaluator.evaluate_feature_combination(
+        face, labels, "Face", subject_ids, model_type
+    )
     
     # # 5. Decision-level fusion evaluation
     # evaluator.evaluate_multimodal_fusion(
@@ -107,7 +106,6 @@ def main():
     easy_cases, hard_cases = select_test_cases(subject_ids,
                                                config.hard_cases_num, 
                                                config.easy_cases_num)
-
     
     # Initialize evaluator
     evaluator = ModelEvaluator(ex_test=ex_test)
@@ -117,7 +115,7 @@ def main():
     # Run evaluations (comment out methods in run_evaluations as needed)
     multimodal_importances = run_evaluations(
         evaluator, 
-        features[:],  # acoustic, motion, face, correlation
+        features[:3],  # acoustic, motion, face
         labels,
         subject_ids,
         config.model_type
@@ -130,7 +128,7 @@ def main():
             sum(feature_names[:], []),  # Combine all feature names
             multimodal_importances, 
             "多模态", 
-            top_n=30
+            top_n=20
         )
 
 if __name__ == "__main__":
