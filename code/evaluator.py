@@ -25,15 +25,9 @@ import torch
 
 class ModelEvaluator:
     """统一管理模型评估流程，支持两种数据划分方式"""    
-    def __init__(self, easy_subjects=None, hard_subjects=None, ex_test=False):
+    def __init__(self):
         self._set_random_seeds(config.seed)
-        self.easy_subjects = easy_subjects
-        self.hard_subjects = hard_subjects
-        self.test_subjects = easy_subjects + hard_subjects if easy_subjects and hard_subjects else None
-        if ex_test:
-            self.test_subjects = ['01', '02', '03', '04', '05']
         self.cross_validator = StratifiedGroupKFold(n_splits=config.n_splits, shuffle=True, random_state=config.seed)
-        self.ex_test = ex_test
 
         self.model_configs = {
             'svm': {'class': SVC, 'params': {'kernel': 'rbf', 'C': 1.0, 'gamma': 'scale', 
@@ -99,16 +93,9 @@ class ModelEvaluator:
         metrics.update({'accuracy': report['accuracy']})
         return metrics
 
-    def _split_data_by_subjects(self, groups):
-        """根据指定的测试集婴儿划分数据"""
-        train_mask = ~np.isin(groups, self.test_subjects)
-        if sum(train_mask) == 0:
-            raise ValueError("没有足够的训练数据，请检查测试集婴儿划分")
-        return train_mask
-
     def _print_metrics(self, metrics):
         """打印评估指标"""
-        for k in ['precision', 'recall', 'accuracy', 'f1-score']:
+        for k in ['accuracy', 'precision', 'recall', 'f1-score']:
             print(f"{k.capitalize()}: {metrics[k]:.4f}")
 
     def _train_model(self, X_train, y_train, model):
@@ -130,55 +117,25 @@ class ModelEvaluator:
         X, y, groups = self._prepare_features(feature_data), np.array(target_labels), np.array(subject_ids)
         print(f"Original feature dimension: {X.shape[1]}")
 
-        if self.test_subjects:
-            train_mask = self._split_data_by_subjects(groups)
-            model, scaler = self._train_model(X[train_mask], y[train_mask], model)
-            
-            if self.ex_test:
-                # test_mask = np.isin(groups, self.test_subjects)
-                # metrics = self._evaluate_model(model, scaler, X[test_mask], y[test_mask])
-                # print(f"\n Test Metrics:")
-                # self._print_metrics(metrics) 
-                for idx, subjects in enumerate(self.test_subjects):
-                    test_mask = np.isin(groups, subjects)
-                    y_pred = model.predict(scaler.transform(X[test_mask]))
-                    correct = (y_pred == y[test_mask]).sum().item()
-                    total = test_mask.sum().item()
-                    print(f"{subjects}:{correct}/{total}")
-                    print("Predict:", y_pred)  # 打印模型预测结果
-                    print("Label:", y[test_mask])  # 打印真实标签
-            else:
-                for test_name, test_subjects in {'easy': self.easy_subjects, 'hard': self.hard_subjects, 'all': self.test_subjects}.items():
-                    test_mask = np.isin(groups, test_subjects)
-                    
-                    metrics = self._evaluate_model(model, scaler, X[test_mask], y[test_mask])
-                    print(f"\n{test_name.capitalize()} Test Metrics:")
-                    self._print_metrics(metrics)                
+        importance = []
+        metrics = {k: [] for k in ['precision', 'recall', 'f1-score', 'accuracy']}
+        groups = [group.split('_')[0] for group in groups]
+        for train_idx, test_idx in tqdm(self.cross_validator.split(X, y, groups), total=config.n_splits, desc=f"{method_name} ({model_architecture})"):
+            model, scaler = self._train_model(X[train_idx], y[train_idx], model)
+            fold_metrics = self._evaluate_model(model, scaler, X[test_idx], y[test_idx])
+            for k in metrics: metrics[k].append(fold_metrics[k])
 
             if model_architecture.lower() in ['rf', 'lgbm']:
-                return model.feature_importances_ / np.sum(model.feature_importances_)
+                importance.append(model.feature_importances_ / np.sum(model.feature_importances_))
+        
+        avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
+        self._print_metrics(avg_metrics)
+        
+        if model_architecture.lower() in ['rf', 'lgbm']:
+            avg_importance = np.mean(importance, axis=0)
+            return avg_importance
 
-            return None
-        else:
-            importance = []
-            metrics = {k: [] for k in ['precision', 'recall', 'f1-score', 'accuracy']}
-            groups = [group.split('_')[0] for group in groups]
-            for train_idx, test_idx in tqdm(self.cross_validator.split(X, y, groups), total=config.n_splits, desc=f"{method_name} ({model_architecture})"):
-                model, scaler = self._train_model(X[train_idx], y[train_idx], model)
-                fold_metrics = self._evaluate_model(model, scaler, X[test_idx], y[test_idx])
-                for k in metrics: metrics[k].append(fold_metrics[k])
-
-                if model_architecture.lower() in ['rf', 'lgbm']:
-                    importance.append(model.feature_importances_ / np.sum(model.feature_importances_))
-            
-            avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
-            self._print_metrics(avg_metrics)
-            
-            if model_architecture.lower() in ['rf', 'lgbm']:
-                avg_importance = np.mean(importance, axis=0)
-                return avg_importance
-
-            return None
+        return None
 
     def evaluate_multimodal_fusion(self, feature_data, target_labels, method_name, subject_ids, acoustic_model, motion_model, face_model):
         """评估多模态融合(stacking方法)"""
@@ -225,31 +182,16 @@ class ModelEvaluator:
             y_pred = trained_models['stacking_model'].predict(np.hstack([X_test[m] for m in ['audio', 'motion', 'face']]))
             return self._compute_metrics(y[test_idx], y_pred)
 
-        if self.test_subjects:
-            train_mask = self._split_data_by_subjects(groups)
-            trained_models = train_fold(train_mask)
-            
-            for test_name, test_subjects in {'easy': self.easy_subjects, 'hard': self.hard_subjects, 'all': self.test_subjects}.items():
-                test_mask = np.isin(groups, test_subjects)
-                if sum(test_mask) == 0:
-                    print(f"警告：{test_name}测试集为空")
-                    continue
-                
-                metrics = evaluate_fold(test_mask, trained_models)
-                print(f"\n{test_name.capitalize()} Test Metrics:")
-                self._print_metrics(metrics)
-            return metrics
-        else:
-            metrics = {k: [] for k in ['accuracy', 'precision', 'recall', 'f1-score']}
-            groups = [group.split('_')[0] for group in groups]
-            for train_idx, test_idx in tqdm(self.cross_validator.split(X_audio, y, groups), total=config.n_splits, desc=f"{method_name}"):
-                trained_models = train_fold(train_idx)
-                fold_metrics = evaluate_fold(test_idx, trained_models)
-                for k in metrics: metrics[k].append(fold_metrics[k])
-            
-            avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
-            self._print_metrics(avg_metrics)
-            return avg_metrics
+        metrics = {k: [] for k in ['accuracy', 'precision', 'recall', 'f1-score']}
+        groups = [group.split('_')[0] for group in groups]
+        for train_idx, test_idx in tqdm(self.cross_validator.split(X_audio, y, groups), total=config.n_splits, desc=f"{method_name}"):
+            trained_models = train_fold(train_idx)
+            fold_metrics = evaluate_fold(test_idx, trained_models)
+            for k in metrics: metrics[k].append(fold_metrics[k])
+        
+        avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
+        self._print_metrics(avg_metrics)
+        return avg_metrics
 
     def _calculate_entropy(self, probabilities):
         """计算给定概率分布的熵。"""
@@ -335,39 +277,12 @@ class ModelEvaluator:
             return self._compute_metrics(y_true_fold, y_pred_final)
         
 
-        if self.test_subjects:
-            train_mask = self._split_data_by_subjects(groups)
-            trained_models = train_conditional_models(train_mask)
-            
-            if self.ex_test:
-                test_mask = np.isin(groups, self.test_subjects)
-                metrics = evaluate_conditional_models(test_mask, trained_models)
-                print(f"\n Test Metrics:")
-                self._print_metrics(metrics) 
-                # for idx, subjects in enumerate(self.test_subjects):
-                #     test_mask = np.isin(groups, subjects)
-                #     y_pred = model.predict(scaler.transform(X[test_mask]))
-                #     print(subjects)
-                #     print("Predict:", y_pred)  # 打印模型预测结果
-                #     print("Label:", y[test_mask])  # 打印真实标签
-            else:            
-                for test_name, test_subjects in {'easy': self.easy_subjects, 'hard': self.hard_subjects, 'all': self.test_subjects}.items():
-                    test_mask = np.isin(groups, test_subjects)
-                    if sum(test_mask) == 0:
-                        print(f"警告：{test_name}测试集为空")
-                        continue
-                    
-                    metrics = evaluate_conditional_models(test_mask, trained_models)
-                    print(f"\n{test_name.capitalize()} Test Metrics:")
-                    self._print_metrics(metrics)
-                return metrics
-        else:
-            metrics = {k: [] for k in ['accuracy', 'precision', 'recall', 'f1-score']}
-            for train_idx, test_idx in tqdm(self.cross_validator.split(X_audio, y, groups), total=config.n_splits, desc=f"{method_name}"):
-                trained_models = train_conditional_models(train_idx)
-                fold_metrics = evaluate_conditional_models(test_idx, trained_models)
-                for k in metrics: metrics[k].append(fold_metrics[k])
-            
-            avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
-            self._print_metrics(avg_metrics)
-            return avg_metrics
+        metrics = {k: [] for k in ['accuracy', 'precision', 'recall', 'f1-score']}
+        for train_idx, test_idx in tqdm(self.cross_validator.split(X_audio, y, groups), total=config.n_splits, desc=f"{method_name}"):
+            trained_models = train_conditional_models(train_idx)
+            fold_metrics = evaluate_conditional_models(test_idx, trained_models)
+            for k in metrics: metrics[k].append(fold_metrics[k])
+        
+        avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
+        self._print_metrics(avg_metrics)
+        return avg_metrics

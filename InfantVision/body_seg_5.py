@@ -355,8 +355,8 @@ def main():
     # video_files = glob.glob(prefix + "*.mp4")
 
     # dataset NICU
-    prefix = "/data/Leo/mm/data/NanfangHospital/data/"
-    # prefix = "/data/Leo/mm/data/ShenzhenUniversityGeneralHospital/data/"
+    # prefix = "/data/Leo/mm/data/NanfangHospital/data/"
+    prefix = "/data/Leo/mm/data/ShenzhenUniversityGeneralHospital/data/"
     video_files = glob.glob(prefix + "*.avi")
 
     for video_file in video_files:
@@ -372,9 +372,6 @@ def main():
                 'Torso-skin': (0, 255, 0, 1),    # Green for torso
             },
         )
-
-
-
 
 if __name__ == "__main__":
     main()

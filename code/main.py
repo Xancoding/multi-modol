@@ -1,134 +1,108 @@
-from data_loader import load_data
-from evaluator import ModelEvaluator
+import data_loader
+import evaluator
 import config
 import utils
-import random
 
-def select_test_cases(subject_ids, hard_cases_num=20, easy_cases_num=20):
-    """Select balanced test cases (hard and easy)"""
-    random.seed(config.seed)  # Ensure reproducibility
-    # Predefined difficult cases
-    difficult_cases = {
-        "50cm3.16kg", "52cm3.52kg1", "50cm3.2kg", "50cm3.4kg2", "51cm3.25kg",
-        "47cm2.9kg", "48cm2.6kg", "48cm2.7kg1", "48cm2.58kg", "48cm3.15kg",
-        "48cm3.44kg", "49cm3.4kg", "50cm2.94kg", "50cm2.95kg2", "50cm3.1kg2",
-        "50cm3.2kg4", "50cm3.13kg", "50cm3.15kg1", "50cm3.15kg2", "50cm3.22kg",
-        "50cm3.22kg1", "50cm3.24kg", "50cm3.44kg", "50cm3.71kg", "50cm3kg3",
-        "51cm2.97kg", "51cm3.2kg", "51cm3.55kg", "51cm3.74kg", "51cm4.05kg",
-        "52cm3.4kg1", "52cm3.75kg", "53cm3.81kg", "54cm3.9kg"
-    }
-    all_cases = set(subject_ids)
-    easy_cases = list(all_cases - difficult_cases)
-    # Random selection with seed
-    selected_hard = random.sample(sorted(difficult_cases), min(hard_cases_num, len(difficult_cases)))
-    selected_easy = random.sample(sorted(easy_cases), min(easy_cases_num, len(easy_cases)))
-    print(f"Total: {len(all_cases)} | Hard: {len(selected_hard)} | Easy: {len(selected_easy)}")
-    return selected_easy, selected_hard
-
-def print_top_features(feature_names, importance_scores, modality_name, top_n=10):
-    """Print top N important features with their scores"""
+def display_top_features(feature_names, importance_scores, modality_name, num_features=10):
+    """Display the top N features with their importance scores for a given modality."""
     if not feature_names or importance_scores is None:
         return
     
     sorted_features = sorted(zip(feature_names, importance_scores), 
                            key=lambda x: x[1], reverse=True)
     
-    print(f"\n{modality_name} Top {top_n} Features:")
-    for i, (name, score) in enumerate(sorted_features[:top_n]):
-        print(f"{i+1}. {name}: {score:.3f}")
+    print(f"\n{modality_name} Top {num_features} Features:")
+    for index, (name, score) in enumerate(sorted_features[:num_features], 1):
+        print(f"{index}. {name}: {score:.3f}")
 
-def run_evaluations(evaluator, features, labels, subject_ids, model_type):
+def execute_evaluations(model_evaluator, feature_sets, target_labels, participant_ids, model_type):
     """
-    Run all evaluation methods with easy commenting capability.
-    Returns multimodal importances for feature importance analysis.
+    Execute all evaluation methods with clear commenting for enabling/disabling.
+    Returns multimodal importance scores for feature analysis.
     """
-    # Unpack features for clarity
-    acoustic, motion, face = features[0], features[1], features[2]
-    combined_features = (acoustic, motion, face)
-    # combined_features = (motion, face)
+    # Unpack feature sets for clarity
+    audio_features, motion_features, facial_features = feature_sets
+    combined_feature_set = (audio_features, motion_features, facial_features)
     
     # ======================================================
-    # Evaluation Methods (Comment/uncomment as needed)
+    # Evaluation Methods (Enable/disable by commenting)
     # ======================================================
     
     # 1. Audio modality evaluation
-    evaluator.evaluate_feature_combination(
-        acoustic, labels, "Audio", subject_ids, model_type
+    model_evaluator.evaluate_feature_combination(
+        audio_features, target_labels, "Audio", participant_ids, model_type
     )
 
     # 2. Motion modality evaluation
-    evaluator.evaluate_feature_combination(
-        motion, labels, "Motion", subject_ids, model_type
+    model_evaluator.evaluate_feature_combination(
+        motion_features, target_labels, "Motion", participant_ids, model_type
     )
     
-    # 3. Face modality evaluation
-    evaluator.evaluate_feature_combination(
-        face, labels, "Face", subject_ids, model_type
+    # 3. Facial modality evaluation
+    model_evaluator.evaluate_feature_combination(
+        facial_features, target_labels, "Face", participant_ids, model_type
     )
     
-    # # 5. Decision-level fusion evaluation
-    # evaluator.evaluate_multimodal_fusion(
-    #     combined_features, 
-    #     labels, "Multimodal-Decision Level Fusion (Stacking)", 
-    #     subject_ids, model_type, model_type, model_type
-    # )
-
     # 4. Feature-level fusion evaluation
-    multimodal_importances = evaluator.evaluate_feature_combination(
-        combined_features, 
-        labels, "Multimodal-Feature Level Fusion (Concatenation)", subject_ids, model_type,
+    multimodal_importance_scores = model_evaluator.evaluate_feature_combination(
+        combined_feature_set, 
+        target_labels, 
+        "Multimodal-Early Fusion (Concatenation)", 
+        participant_ids, 
+        model_type
     )
+
+    # # 5. Decision-level fusion evaluation
+    # model_evaluator.evaluate_multimodal_fusion(
+    #     combined_feature_set, 
+    #     target_labels, 
+    #     "Multimodal-Late Fusion (Stacking)", 
+    #     participant_ids, 
+    #     model_type, 
+    #     model_type, 
+    #     model_type
+    # )
     
-    # # 6. Conditional fusion evaluation
-    # evaluator.evaluate_conditional_fusion(
-    #     combined_features, 
-    #     labels, 
+    # # 6. Conditional fusion evaluation (disabled by default)
+    # model_evaluator.evaluate_conditional_fusion(
+    #     combined_feature_set, 
+    #     target_labels, 
     #     "Multimodal-Conditional Fusion (Entropy Thresholding)",
-    #     subject_ids, 
+    #     participant_ids, 
     #     model_type, 
-    #     model_type, 
+    #     model_type
     # )
 
-
-    return multimodal_importances
-    # return None
+    return None
 
 def main():
-    """Main experiment function"""
-    ex_test = False
-    is_print = False
+    """Main function to orchestrate the experiment workflow."""
+    enable_feature_printing = False
     utils.initialize_random_seed(config.seed)
     
-    # Load all data
-    (subject_ids, features, labels, feature_names) = load_data(ex_test)
-
-    # Select test cases
-    easy_cases, hard_cases = select_test_cases(subject_ids,
-                                               config.hard_cases_num, 
-                                               config.easy_cases_num)
+    # Load dataset
+    participant_ids, feature_sets, target_labels, feature_names = data_loader.load_data()
     
-    # Initialize evaluator
-    evaluator = ModelEvaluator(ex_test=ex_test)
-    # evaluator = ModelEvaluator(easy_cases, hard_cases)
-
+    # Initialize model evaluator
+    model_evaluator = evaluator.ModelEvaluator()
     
-    # Run evaluations (comment out methods in run_evaluations as needed)
-    multimodal_importances = run_evaluations(
-        evaluator, 
-        features[:3],  # acoustic, motion, face
-        labels,
-        subject_ids,
+    # Execute evaluations (modify evaluation methods in execute_evaluations as needed)
+    multimodal_importance_scores = execute_evaluations(
+        model_evaluator, 
+        feature_sets[:3],  # audio, motion, facial features
+        target_labels,
+        participant_ids,
         config.model_type
     )
     
-    print("\n=== Evaluation Complete ===")
+    print("\n=== Evaluation Completed ===")
     
-    if config.model_type in ['xgb', 'lgbm', 'rf'] and is_print:
-        print_top_features(
-            sum(feature_names[:], []),  # Combine all feature names
-            multimodal_importances, 
-            "多模态", 
-            top_n=20
+    if config.model_type in ['xgb', 'lgbm', 'rf'] and enable_feature_printing:
+        display_top_features(
+            sum(feature_names, []),  # Flatten all feature names
+            multimodal_importance_scores, 
+            "Multimodal", 
+            num_features=20
         )
 
 if __name__ == "__main__":

@@ -8,12 +8,13 @@ import numpy as np
 # 抑制警告
 warnings.filterwarnings("ignore", category=UserWarning)
 
-def extract_motion_components(window_data: List[Dict], key: str) -> Dict[str, np.ndarray]:
+def extract_motion_components(window_data: List[Dict], field_name: str) -> Dict[str, np.ndarray]:
     """从窗口数据中提取x、y、r、角度四个维度的数据"""
     components = {'x': [], 'y': [], 'r': [], 'angle': []}
     for frame in window_data:
-        if key in frame and frame[key]:
-            best = max(frame[key], key=lambda x: x[4])
+        if field_name in frame and frame[field_name]:
+            best = max(frame[field_name], key=lambda x: x[4])
+            # best = frame[field_name][0]
             components['x'].append(best[0])
             components['y'].append(best[1])
             components['r'].append(best[2])

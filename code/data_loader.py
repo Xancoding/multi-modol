@@ -12,8 +12,8 @@ from torch.utils.data import Dataset
 
 # Local imports
 from features.Feature_Extraction_Audio import acoustic_features_and_spectrogram, NICUWav2Segments, extract_raw_acoustic_features
-from features.Feature_Extraction_Body import body_features, extract_raw_motion_features
-from features.Feature_Extraction_Face import facial_features, extract_raw_face_features
+from features.Feature_Extraction_Body import body_features
+from features.Feature_Extraction_Face import facial_features
 import config
 import utils
 
@@ -203,10 +203,10 @@ def prepare_feature_matrices(subject_data):
         face_feature_names,
     )
 
-def load_data(ex_test=False):
+def load_data():
     """Load and prepare all data"""
     prefix = config.dataDir
-    wav_files = glob.glob(f"{prefix}*.wav")
+    ori_wav_files = glob.glob(f"{prefix}*.wav")
     excluded_wav_files = [prefix + x + '.wav' for x in 
                         [
                             'hbxd-m_2025-07-29-14-45-40',
@@ -218,27 +218,31 @@ def load_data(ex_test=False):
                             'mxt-baby-f_2025-07-29-13-09-45',
                             'ydw-baby-f_2025-07-29-15-17-50',
                             'ysqd-f_2025-07-29-16-34-26',
+                            'cjyd-m_2025-08-05-15-43-31',
+                            'dxh-baby-f_2025-08-05-13-48-59',
+                            'hyy-baby-m_2025-08-05-13-29-37',
+                            'thz-m_2025-08-05-12-45-55',
+                            'hmx-baby-f_2025-08-11-17-21-54',
+                            'wss-baby-f_2025-08-11-17-34-58',
+                            'hmx-baby-f_2025-08-14-16-54-55',
+
+                            'fm-baby-m_2025-08-05-17-05-20',
 
                             # 'hym-baby-f_2025-07-29-13-02-20',
                             # 'xgx-baby-m_2025-07-29-13-29-54',
                             # 'hym-baby-f_2025-07-29-15-26-27',
-                            # 'cjyx-f_2025-07-29-16-48-32'
+                            # 'cjyx-f_2025-07-29-16-48-32',
+                            # 'lxt-f_2025-07-29-17-14-18',
+                            # 'xgx-baby-m_2025-07-29-15-39-53'
+                            # 'lyj-baby-f_2025-08-02-15-54-55',
+                            # 'cjq-baby-m_2025-08-02-17-12-24',
+                            # 'lwc-m_2025-08-02-16-47-18'
+                            # 'wxl-baby-m_2025-08-05-12-19-40',  
+                            # 'cfy-baby-m_2025-08-05-14-05-54',  
+                            # 'hj-baby-m_2025-08-07-16-28-22',
+                            # 'zl-baby-m_2025-08-18-17-25-39'
                         ]]    
-    # if ex_test:
-    #     excluded_wav_files = [prefix + x + '.wav' for x in 
-    #                         [
-    #                             'old02', 'old03', 'old05',
-    #                         '52cm3.52kg1', '47cm2.74kg', '50cm3.16kg', '50cm3.1kg1', '52cm3.28kg'
-    #                         ]]
-    # else:
-    #     excluded_wav_files = [prefix + x + '.wav' for x in 
-    #                         [
-    #                             'old02', 'old03', 'old05',
-    #                           '01', '02', '03', '04', '05', 
-    #                         ]]
-    wav_files = [f for f in wav_files if f not in excluded_wav_files]
-    
-    print(f"Found {len(wav_files)} audio files")
+    wav_files = [f for f in ori_wav_files if f not in excluded_wav_files]
 
     subject_data = load_or_extract_features(wav_files)
     print(f"Total subjects: {len(subject_data)}")

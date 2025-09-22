@@ -254,8 +254,8 @@ def main():
     # video_files = glob.glob(prefix + "*.mp4")
 
     # dataset NICU
-    # prefix = "/data/Leo/mm/data/ShenzhenUniversityGeneralHospital/data/"
-    prefix = "/data/Leo/mm/data/NanfangHospital/data/"
+    prefix = "/data/Leo/mm/data/ShenzhenUniversityGeneralHospital/data/"
+    # prefix = "/data/Leo/mm/data/NanfangHospital/data/"
     video_files = glob.glob(prefix + "*.avi")
 
     for video_file in video_files:
