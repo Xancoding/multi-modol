@@ -15,7 +15,7 @@ def display_top_features(feature_names, importance_scores, modality_name, num_fe
     for index, (name, score) in enumerate(sorted_features[:num_features], 1):
         print(f"{index}. {name}: {score:.3f}")
 
-def execute_evaluations(model_evaluator, feature_sets, target_labels, participant_ids, model_type):
+def execute_evaluations(model_evaluator, feature_sets, target_labels, participant_ids, model_type, scenes, tasks, enable_scene_printing):
     """
     Execute all evaluation methods with clear commenting for enabling/disabling.
     Returns multimodal importance scores for feature analysis.
@@ -27,77 +27,81 @@ def execute_evaluations(model_evaluator, feature_sets, target_labels, participan
     # ======================================================
     # Evaluation Methods (Enable/disable by commenting)
     # ======================================================
-    
-    # 1. Audio modality evaluation
-    model_evaluator.evaluate_feature_combination(
-        audio_features, target_labels, "Audio", participant_ids, model_type
-    )
-
-    # 2. Motion modality evaluation
-    model_evaluator.evaluate_feature_combination(
-        motion_features, target_labels, "Motion", participant_ids, model_type
-    )
-    
-    # 3. Facial modality evaluation
-    model_evaluator.evaluate_feature_combination(
-        facial_features, target_labels, "Face", participant_ids, model_type
-    )
-    
-    # 4. Feature-level fusion evaluation
-    multimodal_importance_scores = model_evaluator.evaluate_feature_combination(
-        combined_feature_set, 
-        target_labels, 
-        "Multimodal-Early Fusion (Concatenation)", 
-        participant_ids, 
-        model_type
-    )
-
-    # # 5. Decision-level fusion evaluation
-    # model_evaluator.evaluate_multimodal_fusion(
-    #     combined_feature_set, 
-    #     target_labels, 
-    #     "Multimodal-Late Fusion (Stacking)", 
-    #     participant_ids, 
-    #     model_type, 
-    #     model_type, 
-    #     model_type
-    # )
-    
-    # # 6. Conditional fusion evaluation (disabled by default)
-    # model_evaluator.evaluate_conditional_fusion(
-    #     combined_feature_set, 
-    #     target_labels, 
-    #     "Multimodal-Conditional Fusion (Entropy Thresholding)",
-    #     participant_ids, 
-    #     model_type, 
-    #     model_type
-    # )
+    if 'audio' in tasks:
+        # 1. Audio modality evaluation
+        model_evaluator.evaluate_feature_combination(
+            audio_features, target_labels, scenes, "Audio", participant_ids, model_type, enable_scene_printing
+        )
+    if 'motion' in tasks:
+        # 2. Motion modality evaluation
+        model_evaluator.evaluate_feature_combination(
+            motion_features, target_labels, scenes, "Motion", participant_ids, model_type, enable_scene_printing
+        )
+    if 'face' in tasks:
+        # 3. Facial modality evaluation
+        model_evaluator.evaluate_feature_combination(
+            facial_features, target_labels, scenes, "Face", participant_ids, model_type, enable_scene_printing
+        )
+    if 'late_fusion' in tasks:
+        # 4. Decision-level fusion evaluation
+        model_evaluator.evaluate_multimodal_fusion(
+            combined_feature_set, 
+            target_labels, 
+            "Multimodal-Late Fusion (Stacking)", 
+            participant_ids, 
+            model_type, 
+            model_type, 
+            model_type
+        )
+    if 'early_fusion' in tasks:
+        # 5. Feature-level fusion evaluation
+        multimodal_importance_scores = model_evaluator.evaluate_feature_combination(
+            combined_feature_set, 
+            target_labels, 
+            scenes,
+            "Multimodal-Early Fusion (Concatenation)", 
+            participant_ids, 
+            model_type,
+            enable_scene_printing
+        )
+        return multimodal_importance_scores
 
     return None
 
 def main():
     """Main function to orchestrate the experiment workflow."""
     enable_feature_printing = False
+    enable_scene_printing = False
     utils.initialize_random_seed(config.seed)
     
     # Load dataset
-    participant_ids, feature_sets, target_labels, feature_names = data_loader.load_data()
+    participant_ids, feature_sets, feature_names, labels, scenes = data_loader.load_data(enable_scene_printing)
     
     # Initialize model evaluator
     model_evaluator = evaluator.ModelEvaluator()
-    
+
+    tasks = [
+        # 'audio', 
+        # 'motion', 
+        'face', 
+        # 'early_fusion', 
+        # 'late_fusion',
+        ]
     # Execute evaluations (modify evaluation methods in execute_evaluations as needed)
     multimodal_importance_scores = execute_evaluations(
         model_evaluator, 
         feature_sets[:3],  # audio, motion, facial features
-        target_labels,
+        labels,
         participant_ids,
-        config.model_type
+        config.model_type,
+        scenes,
+        tasks=tasks,
+        enable_scene_printing=enable_scene_printing,
     )
     
     print("\n=== Evaluation Completed ===")
     
-    if config.model_type in ['xgb', 'lgbm', 'rf'] and enable_feature_printing:
+    if config.model_type in ['lgbm', 'rf'] and enable_feature_printing:
         display_top_features(
             sum(feature_names, []),  # Flatten all feature names
             multimodal_importance_scores, 

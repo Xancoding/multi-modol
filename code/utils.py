@@ -34,7 +34,7 @@ def get_label_file_path(dataDir: str) -> str:
 
 def get_scene_file_path(dataDir: str) -> str:
     """Construct path for scene file based on data directory."""
-    base_name, new_parent = prepare_feature_output_path(dataDir, "SCENE")
+    base_name, new_parent = prepare_feature_output_path(dataDir, "Scene")
     return os.path.join(new_parent, f"{base_name}.txt")
 
 def get_motion_feature_file_path(dataDir: str) -> str:
@@ -97,16 +97,42 @@ def calculate_window_params(
         int(round(step_size_sec * fps))
     )
 
-def filter_outliers(values: np.ndarray, threshold: float = 0.5) -> np.ndarray:
-    """Replace outliers with NaNs using IQR method if outlier ratio < threshold."""
+def filter_outliers(
+    values: np.ndarray,
+    iqr_coef: float = 2.5,
+    threshold: float = 0.3
+) -> np.ndarray:
+    """
+    Filters outliers using the IQR method and replaces them with NaN.
+    
+    Parameters:
+    -----------
+    values : np.ndarray
+        Input data array (e.g., MAR values or motion amplitudes).
+    iqr_coef : float, default=2.5
+        Multiplier for IQR to set outlier boundaries:
+        - Higher values → Fewer values marked as outliers (more lenient)
+        - Lower values → More values marked as outliers (more sensitive)
+        Typical range: 1.5 (strict) to 3.0 (lenient).
+    threshold : float, default=0.3
+        Maximum allowed ratio of outliers to total data points (0.0-1.0):
+        - If outlier ratio < threshold → Replace outliers with NaN
+        - If outlier ratio ≥ threshold → Keep all data unchanged
+        Lower values → More conservative filtering.
+
+    Returns:
+    --------
+    np.ndarray
+        Data with outliers replaced by NaN (if conditions met).
+    """
     if values.size < 10 or np.sum(~np.isnan(values)) < 10:
         return values
     
     valid_values = values[~np.isnan(values)]
     Q1, Q3 = np.nanpercentile(valid_values, [25, 75])
     IQR = Q3 - Q1
-    upper_bound = Q3 + 3.0 * IQR
-    lower_bound = Q1 - 3.0 * IQR
+    upper_bound = Q3 + iqr_coef * IQR
+    lower_bound = Q1 - iqr_coef * IQR
     
     outliers = (values > upper_bound) | (values < lower_bound)
     outlier_ratio = np.sum(outliers) / values.size

@@ -5,30 +5,29 @@ from tqdm import tqdm
 # Scikit-learn imports
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 from sklearn.model_selection import StratifiedGroupKFold
-from sklearn.ensemble import RandomForestClassifier, StackingClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.calibration import CalibratedClassifierCV
 from lightgbm import LGBMClassifier
-
-# PyTorch imports
-from torch.utils.data import DataLoader
-from torch.utils.data.sampler import WeightedRandomSampler
+from imblearn.over_sampling import RandomOverSampler
+from sklearn.ensemble import StackingClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer  # 用于指定特征列范围
 
 # Local imports
 import config
-from data_loader import FeatureDataset, compute_class_weights
-
 import random
 import torch
 
 class ModelEvaluator:
-    """统一管理模型评估流程，支持两种数据划分方式"""    
+    """Manages model evaluation workflow with two data splitting strategies"""
     def __init__(self):
         self._set_random_seeds(config.seed)
+        self.generator = torch.Generator().manual_seed(config.seed)
         self.cross_validator = StratifiedGroupKFold(n_splits=config.n_splits, shuffle=True, random_state=config.seed)
-
+        self.metric_names = ['accuracy', 'precision', 'recall', 'specificity', 'f1-score']
+        # Model configurations
         self.model_configs = {
             'svm': {'class': SVC, 'params': {'kernel': 'rbf', 'C': 1.0, 'gamma': 'scale', 
                                               'class_weight': 'balanced', 'probability': True, 'random_state': config.seed}},
@@ -39,7 +38,7 @@ class ModelEvaluator:
         }
 
     def _set_random_seeds(self, seed):
-        """设置所有随机种子"""
+        """Set all random seeds for reproducibility"""
         np.random.seed(seed)
         random.seed(seed)
         torch.manual_seed(seed)
@@ -49,240 +48,209 @@ class ModelEvaluator:
         torch.backends.cudnn.benchmark = False
 
     def create_model(self, model_architecture):
-        """创建指定类型的分类器"""
+        """Instantiate specified classifier type"""
         config = self.model_configs.get(model_architecture.lower())
         return config['class'](**config['params']) if config else None
 
     def _prepare_features(self, feature_data):
-        """准备特征数据，支持单模态或多模态拼接"""
+        """Prepare feature data for single or multi-modal input"""
         if isinstance(feature_data, tuple):
-            return np.concatenate([np.array(f) if not isinstance(f, np.ndarray) else f for f in feature_data], axis=1)
-        return np.array(feature_data) if not isinstance(feature_data, np.ndarray) else feature_data
-
-    def create_balanced_data(self, X_train, y_train):
-        """创建平衡数据集"""
-        training_dataset = FeatureDataset(X_train, y_train)
-        class_weights = compute_class_weights(y_train)
-        num_classes = len(np.unique(y_train))
-
-        sampler = WeightedRandomSampler(
-            class_weights,
-            num_samples=num_classes*len(class_weights),
-            replacement=True,
-            generator=torch.Generator().manual_seed(config.seed)
-        )
-        
-        loader = DataLoader(
-            training_dataset,
-            batch_size=min(32, len(training_dataset)),
-            sampler=sampler,
-            num_workers=4
-        )
-        
-        features, labels = [], []
-        for batch_f, batch_l in loader:
-            features.append(batch_f.numpy())
-            labels.append(batch_l.numpy())
-        
-        return np.concatenate(features), np.concatenate(labels)
+            assert all(len(f) == len(feature_data[0]) for f in feature_data)
+            return np.concatenate([np.array(f) for f in feature_data], axis=1)
+        return np.array(feature_data)
 
     def _compute_metrics(self, y_true, y_pred):
-        """计算分类指标"""
+        """Compute classification metrics"""
         report = classification_report(y_true, y_pred, output_dict=True)
         metrics = {k: report['macro avg'][k] for k in ['precision', 'recall', 'f1-score']}
         metrics.update({'accuracy': report['accuracy']})
+
+        cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+        tn, fp, fn, tp = cm.ravel()
+        metrics['specificity'] = tn / (tn + fp) if (tn + fp) > 0 else 0 
+
         return metrics
 
     def _print_metrics(self, metrics):
-        """打印评估指标"""
-        for k in ['accuracy', 'precision', 'recall', 'f1-score']:
-            print(f"{k.capitalize()}: {metrics[k]:.4f}")
+        """Print evaluation metrics"""
+        for k in self.metric_names:
+            print(f"{k.capitalize()}: {metrics[k] * 100:.2f}")
 
-    def _train_model(self, X_train, y_train, model):
-        """训练模型"""
+    def _train_model(self, X_train, y_train, model, use_sampling=True):
+        """Train model with balanced data"""
         scaler = StandardScaler().fit(X_train)
-        X_balanced, y_balanced = self.create_balanced_data(scaler.transform(X_train), y_train)
-        model.fit(X_balanced, y_balanced)
+        X_scaled = scaler.transform(X_train)
+        if use_sampling:
+            ros = RandomOverSampler(random_state=config.seed)
+            X_res, y_res = ros.fit_resample(X_scaled, y_train)
+            model.fit(X_res, y_res)
+        else:
+            model.fit(X_scaled, y_train)
         return model, scaler
 
-    def _evaluate_model(self, model, scaler, X_test, y_test):
-        """评估模型"""
-        y_pred = model.predict(scaler.transform(X_test))
-        return self._compute_metrics(y_test, y_pred)
+    def _evaluate_model(self, y_true, y_pred):
+        """Evaluate model performance"""
+        return self._compute_metrics(y_true, y_pred)
 
-    def evaluate_feature_combination(self, feature_data, target_labels, method_name, subject_ids, model_architecture='svm'):
-        """评估特征组合(单模态或多模态直接拼接)"""
+    def evaluate_feature_combination(self, feature_data, target_labels, scenes, method_name, subject_ids, model_architecture='svm', enable_scene_printing=False):
+        """Evaluate feature combination (single or multi-modal)"""
         print(f"\n=== Evaluating {method_name} ({model_architecture}) ===")
-        model = self.create_model(model_architecture)
         X, y, groups = self._prepare_features(feature_data), np.array(target_labels), np.array(subject_ids)
+        scenes = np.array(scenes)
         print(f"Original feature dimension: {X.shape[1]}")
 
         importance = []
-        metrics = {k: [] for k in ['precision', 'recall', 'f1-score', 'accuracy']}
-        groups = [group.split('_')[0] for group in groups]
-        for train_idx, test_idx in tqdm(self.cross_validator.split(X, y, groups), total=config.n_splits, desc=f"{method_name} ({model_architecture})"):
-            model, scaler = self._train_model(X[train_idx], y[train_idx], model)
-            fold_metrics = self._evaluate_model(model, scaler, X[test_idx], y[test_idx])
-            for k in metrics: metrics[k].append(fold_metrics[k])
+        metrics = {k: [] for k in self.metric_names}
+        scene_acc_dict = {}  # Store scene accuracy
+        
+        # Extract subject IDs from group names
+        groups = np.array([str(g).split('_')[0] for g in groups])
+        
+        for train_idx, test_idx in tqdm(self.cross_validator.split(X, y, groups), 
+                                    total=config.n_splits, 
+                                    desc=f"{method_name} ({model_architecture})"):
+            fold_model = self.create_model(model_architecture)
+            trained_model, scaler = self._train_model(X[train_idx], y[train_idx], fold_model)
 
+            y_pred = trained_model.predict(scaler.transform(X[test_idx]))  
+            # Overall evaluation
+            fold_metrics = self._evaluate_model(y[test_idx], y_pred)
+            for k in metrics: 
+                metrics[k].append(fold_metrics[k])
+            
+            # Scene evaluation
+            if not np.all(scenes == 0):
+                for scene in np.unique(scenes[test_idx]):
+                    mask = scenes[test_idx] == scene
+                    scene_acc = accuracy_score(y[test_idx][mask], y_pred[mask])
+                    scene_acc_dict.setdefault(scene, []).append(scene_acc)
+
+            # Feature importance for tree-based models
             if model_architecture.lower() in ['rf', 'lgbm']:
-                importance.append(model.feature_importances_ / np.sum(model.feature_importances_))
+                fold_importance = trained_model.feature_importances_
+                fold_importance = np.maximum(fold_importance, 0)
+                importance.append(fold_importance / np.sum(fold_importance))  # Normalize
         
         avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
         self._print_metrics(avg_metrics)
         
+        # Print scene results
+        if scene_acc_dict and enable_scene_printing:
+            print("\n=== Scene Accuracy ===")
+            for scene in sorted(scene_acc_dict):
+                print(f"Scene {scene}: {np.mean(scene_acc_dict[scene]):.4f}")
+        
+        # Return feature importance if applicable
         if model_architecture.lower() in ['rf', 'lgbm']:
             avg_importance = np.mean(importance, axis=0)
             return avg_importance
 
-        return None
-
-    def evaluate_multimodal_fusion(self, feature_data, target_labels, method_name, subject_ids, acoustic_model, motion_model, face_model):
-        """评估多模态融合(stacking方法)"""
-        print(f"\n=== Evaluating {method_name} ({acoustic_model}, {motion_model}, {face_model}) ===")
-        X_audio = self._prepare_features(feature_data[0])
-        X_motion = self._prepare_features(feature_data[1])
-        X_face = self._prepare_features(feature_data[2])
-        y = np.array(target_labels)
-        groups = np.array(subject_ids)
-
-        def train_fold(train_idx):
-            scalers = {}
-            X_train = {'audio': X_audio[train_idx], 'motion': X_motion[train_idx], 'face': X_face[train_idx]}
-            y_train = y[train_idx]
-            
-            base_models = []
-            for modality, model_arch in zip(['audio', 'motion', 'face'], [acoustic_model, motion_model, face_model]):
-                model = self.create_model(model_arch)
-                if model_arch in ['svm', 'knn']:
-                    model = CalibratedClassifierCV(model, cv=3, method='sigmoid')
-                
-                # Standardize and train using _train_model
-                model, scaler = self._train_model(X_train[modality], y_train, model)
-                scalers[modality] = scaler
-                base_models.append((modality, model))
-            
-            # Prepare stacked features
-            X_stacked = np.hstack([scalers[m].transform(X_train[m]) for m in ['audio', 'motion', 'face']])
-            
-            # Train stacking model using _train_model
-            stacking_model = StackingClassifier(
-                estimators=base_models,
-                final_estimator=LogisticRegression(max_iter=1000, random_state=config.seed),
-                cv=3,
-                stack_method='predict_proba',
-                n_jobs=-1
-            )
-            stacking_model, _ = self._train_model(X_stacked, y_train, stacking_model)
-            
-            return {'base_models': base_models, 'stacking_model': stacking_model, 'scalers': scalers}
-
-        def evaluate_fold(test_idx, trained_models):
-            X_test = {m: trained_models['scalers'][m].transform(d[test_idx]) for m, d in zip(['audio', 'motion', 'face'], [X_audio, X_motion, X_face])}
-            y_pred = trained_models['stacking_model'].predict(np.hstack([X_test[m] for m in ['audio', 'motion', 'face']]))
-            return self._compute_metrics(y[test_idx], y_pred)
-
-        metrics = {k: [] for k in ['accuracy', 'precision', 'recall', 'f1-score']}
-        groups = [group.split('_')[0] for group in groups]
-        for train_idx, test_idx in tqdm(self.cross_validator.split(X_audio, y, groups), total=config.n_splits, desc=f"{method_name}"):
-            trained_models = train_fold(train_idx)
-            fold_metrics = evaluate_fold(test_idx, trained_models)
-            for k in metrics: metrics[k].append(fold_metrics[k])
-        
-        avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
-        self._print_metrics(avg_metrics)
         return avg_metrics
 
-    def _calculate_entropy(self, probabilities):
-        """计算给定概率分布的熵。"""
-        # 避免log(0)
-        probabilities = np.clip(probabilities, 1e-9, 1 - 1e-9)
-        return -np.sum(probabilities * np.log2(probabilities), axis=1)
 
-    def evaluate_conditional_fusion(self, feature_data, target_labels, method_name, subject_ids, 
-                                    model_A_arch, model_B_arch):
-        print(f"\n=== Evaluating Conditional Fusion ({method_name}) ===")
-        print(f"  Model A (Audio+Motion+Face): {model_A_arch}, Model B (Motion+Face): {model_B_arch}")
-
-        X_audio = self._prepare_features(feature_data[0])
-        X_motion = self._prepare_features(feature_data[1])
-        X_face = self._prepare_features(feature_data[2])
+    def evaluate_multimodal_fusion(self, feature_data, target_labels, method_name, subject_ids,
+                                acoustic_model, motion_model, face_model):
+        """
+        Evaluate Stacking fusion strategy for multimodal data
+        Each base model only uses its corresponding modality features
+        """
+        print(f"\n=== Evaluating {method_name} ({acoustic_model}, {motion_model}, {face_model}) ===")
         
-        # New: Prepare X for Model A (audio + motion + face)
-        X_all_modalities = self._prepare_features((X_audio, X_motion, X_face)) 
-        
-        # X for Model B (motion + face) remains the same
-        X_motion_face = self._prepare_features((X_motion, X_face)) 
-        
+        # Prepare labels and groups for stratified group cross-validation
         y = np.array(target_labels)
-        groups = np.array(subject_ids)
-
-        def train_conditional_models(train_idx):
-            # Train Model A (All Modalities: Audio + Motion + Face)
-            model_A = self.create_model(model_A_arch)
-            if not hasattr(model_A, 'predict_proba'):
-                model_A = CalibratedClassifierCV(model_A, cv=3, method='isotonic' if model_A_arch == 'svm' else 'sigmoid')
-            
-            model_A, scaler_A = self._train_model(X_all_modalities[train_idx], y[train_idx], model_A)
-
-            # Train Model B (Motion + Face)
-            model_B = self.create_model(model_B_arch)
-            if not hasattr(model_B, 'predict_proba'):
-                model_B = CalibratedClassifierCV(model_B, cv=3, method='isotonic' if model_B_arch == 'svm' else 'sigmoid')
-            
-            model_B, scaler_B = self._train_model(X_motion_face[train_idx], y[train_idx], model_B)
-            
-            return {
-                'model_A': model_A, 'scaler_A': scaler_A,
-                'model_B': model_B, 'scaler_B': scaler_B
-            }
-
-        def evaluate_conditional_models(test_idx, trained_models):
-            model_A = trained_models['model_A']
-            scaler_A = trained_models['scaler_A']
-            model_B = trained_models['model_B']
-            scaler_B = trained_models['scaler_B']
-
-            # Prepare test data for Model A (All Modalities)
-            X_all_modalities_test = scaler_A.transform(X_all_modalities[test_idx])
-            # Prepare test data for Model B (Motion + Face)
-            X_motion_face_test = scaler_B.transform(X_motion_face[test_idx])
-            
-            y_true_fold = y[test_idx]
-
-            # Get probabilities from Model A (All Modalities)
-            proba_A = model_A.predict_proba(X_all_modalities_test)
-            entropy_A = self._calculate_entropy(proba_A) # Entropy for Model A
-
-            # Get probabilities from Model B (Motion + Face)
-            proba_B = model_B.predict_proba(X_motion_face_test)
-            entropy_B = self._calculate_entropy(proba_B) # Entropy for Model B
-
-            # Get predictions from Model A and Model B
-            pred_A = model_A.predict(X_all_modalities_test)
-            pred_B = model_B.predict(X_motion_face_test)
-
-            # Initialize final predictions
-            y_pred_final = np.empty_like(pred_A) # Create an empty array to fill
-
-            # Apply new conditional logic: choose the prediction with lower entropy
-            # This creates a boolean mask where True means Model B's entropy is lower
-            choose_model_B_mask = entropy_B < entropy_A
-
-            # Where Model B's entropy is lower, use Model B's prediction
-            y_pred_final[choose_model_B_mask] = pred_B[choose_model_B_mask]
-            # Otherwise (where Model A's entropy is lower or equal), use Model A's prediction
-            y_pred_final[~choose_model_B_mask] = pred_A[~choose_model_B_mask]
-            
-            return self._compute_metrics(y_true_fold, y_pred_final)
+        groups = np.array([str(g).split('_')[0] for g in subject_ids])
         
-
-        metrics = {k: [] for k in ['accuracy', 'precision', 'recall', 'f1-score']}
-        for train_idx, test_idx in tqdm(self.cross_validator.split(X_audio, y, groups), total=config.n_splits, desc=f"{method_name}"):
-            trained_models = train_conditional_models(train_idx)
-            fold_metrics = evaluate_conditional_models(test_idx, trained_models)
-            for k in metrics: metrics[k].append(fold_metrics[k])
+        try:
+            # Unpack feature sets for each modality
+            X_acoustic, X_motion, X_face = (np.array(f) for f in feature_data)
+            # Get feature dimensions for each modality (used for column indexing)
+            n_acoustic = X_acoustic.shape[1]
+            n_motion = X_motion.shape[1]
+            n_face = X_face.shape[1]
+        except ValueError:
+            print("Error: feature_data must contain 3 feature sets")
+            return None
         
+        # Initialize dictionary to store metrics across cross-validation folds
+        metrics = {k: [] for k in self.metric_names}
+        
+        # Iterate through each fold of cross-validation
+        for train_idx, test_idx in tqdm(self.cross_validator.split(X_acoustic, y, groups),
+                                        total=config.n_splits,
+                                        desc=f"Stacking ({method_name})"):
+            
+            # Split labels into training and test sets for current fold
+            y_train, y_test = y[train_idx], y[test_idx]
+            
+            # 1. Combine modality features for training and test sets
+            X_train = np.concatenate([
+                X_acoustic[train_idx],  # Acoustic features for training
+                X_motion[train_idx],    # Motion features for training
+                X_face[train_idx]       # Face features for training
+            ], axis=1)
+            X_test = np.concatenate([
+                X_acoustic[test_idx],   # Acoustic features for testing
+                X_motion[test_idx],     # Motion features for testing
+                X_face[test_idx]        # Face features for testing
+            ], axis=1)
+            
+            # 2. Define column ranges for each modality in the combined feature matrix
+            # Acoustic modality: first n_acoustic columns
+            # Motion modality: next n_motion columns
+            # Face modality: remaining n_face columns
+            acoustic_columns = list(range(n_acoustic))
+            motion_columns = list(range(n_acoustic, n_acoustic + n_motion))
+            face_columns = list(range(n_acoustic + n_motion, n_acoustic + n_motion + n_face))
+            
+            # 3. Create dedicated pipelines for each modality
+            # Each pipeline includes:
+            # - Feature selection (only current modality's columns)
+            # - Standardization (only on current modality's features)
+            # - Modality-specific classifier
+            base_models = [
+                ('acoustic', Pipeline([
+                    ('select_features', ColumnTransformer([('select', 'passthrough', acoustic_columns)])),
+                    ('scaler', StandardScaler()),
+                    ('classifier', self.create_model(acoustic_model))
+                ])),
+                ('motion', Pipeline([
+                    ('select_features', ColumnTransformer([('select', 'passthrough', motion_columns)])),
+                    ('scaler', StandardScaler()),
+                    ('classifier', self.create_model(motion_model))
+                ])),
+                ('face', Pipeline([
+                    ('select_features', ColumnTransformer([('select', 'passthrough', face_columns)])),
+                    ('scaler', StandardScaler()),
+                    ('classifier', self.create_model(face_model))
+                ]))
+            ]
+            
+            # 4. Define meta-classifier (fuses predictions from base models)
+            meta_classifier = LogisticRegression(
+                class_weight='balanced',
+                random_state=config.seed,
+                max_iter=1000
+            )
+            
+            # 5. Initialize stacking classifier
+            stacking_classifier = StackingClassifier(
+                estimators=base_models,
+                final_estimator=meta_classifier,
+                cv=3,  # Cross-validation for generating base model predictions
+                stack_method='predict_proba'  # Use class probabilities as meta-features
+            )
+            
+            # 6. Train stacking classifier and generate predictions
+            # Each base model only uses its designated modality features during training
+            stacking_classifier.fit(X_train, y_train)
+            y_pred = stacking_classifier.predict(X_test)
+            
+            # 7. Evaluate performance for current fold
+            fold_metrics = self._evaluate_model(y_test, y_pred)
+            for metric in metrics:
+                metrics[metric].append(fold_metrics[metric])
+        
+        # Calculate average metrics across all cross-validation folds
         avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
         self._print_metrics(avg_metrics)
         return avg_metrics

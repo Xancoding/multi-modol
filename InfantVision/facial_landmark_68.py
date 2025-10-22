@@ -219,7 +219,7 @@ class FaceAlignmentProcessor:
 
             if not first_frame_saved and landmarks is not None:
                 # 在文件名中包含帧号
-                output_img_path = os.path.join(output_dir, f"{base_name}_face_landmarks_frame{frame_idx:05d}.png")
+                output_img_path = os.path.join(output_dir, f"{base_name}_face_landmarks.png")
                 cv2.imwrite(output_img_path, processed_frame)
                 print(f"\n首次检测到人脸 - 帧号: {frame_idx}, 保存为: {os.path.basename(output_img_path)}")
                 first_frame_saved = True
@@ -254,8 +254,9 @@ def main():
     # video_files = glob.glob(prefix + "*.mp4")
 
     # dataset NICU
-    prefix = "/data/Leo/mm/data/ShenzhenUniversityGeneralHospital/data/"
+    # prefix = "/data/Leo/mm/data/ShenzhenUniversityGeneralHospital/data/"
     # prefix = "/data/Leo/mm/data/NanfangHospital/data/"
+    prefix = "/data/Leo/mm/data/badNICU50/data/"
     video_files = glob.glob(prefix + "*.avi")
 
     for video_file in video_files:

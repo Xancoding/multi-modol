@@ -113,17 +113,9 @@ def load_feature_data(file_path, data_type, start_time=0, end_time=float('inf'),
             if data_type == 'motion' and motion_key in rec:
                 motion_records = rec.get(motion_key) 
                 intensity = get_peak_motion(motion_records) if motion_records else None
-                
-                # Face Motion Intensity 特殊归一化/调整 (考虑头部大小)
-                if motion_key == 'Face' and intensity is not None:
-                    head = rec.get('head', []) # 头部边界框信息 (宽度, 高度, ...)
-                    # 调整系数：3 * 头部尺寸 / 视频分辨率面积（这里我假设全身面积约占视频分辨率大小为 1/3）
-                    rate = 3*head[0]*head[1]/(resolution[0]*resolution[1]) if head else 1.0
-                    intensity = intensity * rate if intensity is not None else None
                     
                 values.append(intensity if intensity is not None else np.nan)
-                timestamps.append(frame_time)
-                
+                timestamps.append(frame_time)  
             elif data_type == 'mar' and 'landmarks' in rec:
                 mar = compute_mouth_aspect_ratio(rec['landmarks'])
                 values.append(mar if mar is not None else np.nan)
@@ -254,7 +246,7 @@ def plot_combined_spectrogram_and_features(audio_file, motion_file, face_file, o
     ax_motion.tick_params(axis='y', labelcolor='#FF4136', labelsize=LABELSIZE)
     ax_motion.yaxis.set_label_position('left')
     ax_motion.yaxis.set_ticks_position('left')
-    ax_motion.set_yticklabels([])
+    # ax_motion.set_yticklabels([])
     
     # ax_motion.set_ylabel(
     #     'SMI', 
@@ -277,7 +269,7 @@ def plot_combined_spectrogram_and_features(audio_file, motion_file, face_file, o
         ax_mar.tick_params(axis='y', labelcolor='#FFA500', labelsize=LABELSIZE)
         ax_mar.yaxis.set_label_position('right')
         ax_mar.yaxis.set_ticks_position('right')
-        ax_mar.set_yticklabels([])
+        # ax_mar.set_yticklabels([])
 
         # ax_mar.set_ylabel(
         #     'MAR', 
@@ -387,17 +379,18 @@ if __name__ == "__main__":
     
     prefix = "/data/Leo/mm/data/NICU50" # 数据文件根路径
 
-    # scenes 列表：(婴儿ID, 起始时间, 结束时间, 运动强度类型)
-    # 运动强度类型 (motion_key) 决定使用 'WholeBody' 还是 'Face'
+
+    # Face、Left-arm、Right-arm、Left-leg、Right-leg
+    part = "Face"
     scenes = [
-        ("ydw-baby-f_2025-07-29-13-39-36", "45.000", "47.500", "Face"),
-        ("zm-baby-m_2025-07-23-19-24-10", "545.000", "547.50", "WholeBody"),
-        ("ysqd-f_2025-07-29-15-32-40", "301.500", "304.000", "Face"),
-        ("lxm-baby-m_2025-07-29-14-19-07", "4.000", "6.500", "WholeBody"),
-        ("lxm-baby-m_2025-07-29-14-55-30", "170.000", "172.500", "WholeBody"),
-        ("zm-baby-m_2025-07-23-19-24-10", "9.000", "11.500", "WholeBody"),
-        ("lxm-baby-m_2025-07-29-14-55-30", "10.000", "12.500", "WholeBody"),
-        ("zm-baby-m_2025-07-23-19-24-10", "5.000", "7.500", "WholeBody"),
+        ("ydw-baby-f_2025-07-29-13-39-36", "45.000", "47.500", part),
+        ("zm-baby-m_2025-07-23-19-24-10", "545.000", "547.50", part),
+        ("ysqd-f_2025-07-29-15-32-40", "301.500", "304.000", part),
+        ("lxm-baby-m_2025-07-29-14-19-07", "4.000", "6.500", part),
+        ("lxm-baby-m_2025-07-29-14-55-30", "170.000", "172.500", part),
+        ("zm-baby-m_2025-07-23-19-24-10", "9.000", "11.500", part),
+        ("lxm-baby-m_2025-07-29-14-55-30", "10.000", "12.500", part),
+        ("zm-baby-m_2025-07-23-19-24-10", "5.000", "7.500", part),
     ]
     
     # **第一步：预计算所有全局范围**

@@ -673,13 +673,12 @@ def Data_Acq(fileName):
     return sample
 
 
-def NICUWav2Segments(dataDir, labelDir):
-    # Load and preprocess audio
+def NICUWav2Segments(dataDir, labelDir, sceneDir):
     raw_audio, sr = librosa.load(dataDir, sr=config.audioSampleRate)
     min_t, max_t = utils.get_valid_time_range(labelDir)
     raw_audio = utils.crop_data_by_time(raw_audio, sr, min_t, max_t)
 
-    # Process cry segments (vectorized)
+    # Process cry segments
     cry_ranges = []
     if os.path.exists(labelDir):
         with open(labelDir) as f:
@@ -689,20 +688,43 @@ def NICUWav2Segments(dataDir, labelDir):
                     start, end = (int((float(t)-min_t)*sr) for t in parts[:2])
                     cry_ranges.append((start, end))
 
-    # Generate valid window indices (discard incomplete segments)
+    # Generate windows and labels
     win_size, step_size = utils.calculate_window_params(sr, config.slidingWindows, config.step)
     valid_indices = np.arange(0, len(raw_audio) - win_size + 1, step_size)
-    
-    # Vectorized window extraction (automatically discards incomplete segments)
     windows = np.stack([raw_audio[i:i+win_size] for i in valid_indices])
     
-    # Vectorized label generation
     cry_mask = np.zeros(len(raw_audio), dtype=bool)
     for start, end in cry_ranges:
         cry_mask[start:end] = True
     labels = np.array([cry_mask[i:i+win_size].any() for i in valid_indices], dtype=int)
 
-    return {"data": windows, "label": labels}
+    # Process scene labels
+    scene_priority = {3:0, 1:1, 4:2, 2:3, 8:4, 7:5, 6:6, 5:7}
+    scene_ranges = {stype: [] for stype in scene_priority}
+    
+    if sceneDir is not None and os.path.exists(sceneDir):
+        with open(sceneDir) as f:
+            for line in filter(None, map(str.strip, f)):
+                parts = line.replace('\t', ' ').split()
+                if len(parts) == 3 and (scene_type := int(parts[2])) in scene_priority:
+                    start, end = (int((float(t)-min_t)*sr) for t in parts[:2])
+                    scene_ranges[scene_type].append((start, end))
+
+    scene_mask = np.full(len(raw_audio), -1, dtype=int)
+    for scene_type in sorted(scene_priority, key=scene_priority.get):
+        for start, end in scene_ranges[scene_type]:
+            scene_mask[start:end] = scene_type
+
+    scenes = np.zeros(len(valid_indices), dtype=int)
+    for i, idx in enumerate(valid_indices):
+        window_scenes = scene_mask[idx:idx+win_size]
+        valid_scenes = window_scenes[window_scenes != -1]
+        if len(valid_scenes) > 0:
+            scenes[i] = min(valid_scenes, key=lambda x: scene_priority[x])
+        else:
+            scenes[i] = 5
+
+    return {"data": windows, "label": labels, "scene": scenes}
 
 
 def acoustic_features_and_spectrogram(audioData):
@@ -722,26 +744,11 @@ def acoustic_features_and_spectrogram(audioData):
 
         if i == 0:
             for name in base_feature_names:
-                feature_names.extend([
-                    f"{name}_mean",
-                    f"{name}_median",
-                    f"{name}_std"
-                ])
+                feature_names.append(f"{name}_mean")
+            for name in base_feature_names:
+                feature_names.append(f"{name}_median")
+            for name in base_feature_names:
+                feature_names.append(f"{name}_std")
 
     acoustic_feature = np.array(feature_List)
     return acoustic_feature, feature_names
-
-def extract_raw_acoustic_features(dataDir):
-    labelDir = utils.get_label_file_path(dataDir)
-    sample = NICUWav2Segments(dataDir, labelDir)
-    audioData = sample["data"]
-    
-    feature_List = []
-    for i in range(audioData.shape[0]):
-        features, feature_names = feature_extraction(signal=audioData[i], sampling_rate=config.audioSampleRate,
-                                                     window=config.FFTwindow, step=config.FFTOverlap, deltas=False)
-    
-        feature_List.append(features)
-    acoustic_feature = np.array(feature_List)
-
-    return acoustic_feature, sample["label"], feature_names

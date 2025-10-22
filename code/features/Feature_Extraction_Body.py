@@ -2,124 +2,98 @@ import numpy as np
 import utils
 from typing import List, Dict, Tuple, Callable
 import warnings
-import config
-import numpy as np
 
-# 抑制警告
+# Suppress user warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
-def extract_motion_components(window_data: List[Dict], field_name: str) -> Dict[str, np.ndarray]:
-    """从窗口数据中提取x、y、r、角度四个维度的数据"""
-    components = {'x': [], 'y': [], 'r': [], 'angle': []}
+def extract_amplitude_values(window_data: List[Dict], field_name: str) -> np.ndarray:
+    """
+    Extract motion amplitude values (r) from window data
+    
+    Args:
+        window_data: List of frame data within the window
+        field_name: Field name to extract (e.g., 'Face', 'Left-arm')
+    
+    Returns:
+        Processed amplitude values array (outliers filtered)
+    """
+    amplitude_values = []
     for frame in window_data:
         if field_name in frame and frame[field_name]:
             best = max(frame[field_name], key=lambda x: x[4])
             # best = frame[field_name][0]
-            components['x'].append(best[0])
-            components['y'].append(best[1])
-            components['r'].append(best[2])
-            components['angle'].append(best[3])
+            amplitude_values.append(best[2])
         else:
-            # 填充默认值（例如 0）
-            components['x'].append(0)
-            components['y'].append(0)
-            components['r'].append(0)
-            components['angle'].append(0)
+            amplitude_values.append(np.nan)
+    
+    amplitude_array = np.array(amplitude_values)
+    return utils.filter_outliers(amplitude_array)
 
-    return {k: np.nan_to_num(np.array(v), nan=0) for k, v in components.items()}
-
-def get_feature_calculators(fps: int) -> List[Tuple[str, Callable]]:
-    """返回特征计算函数列表（多维度优化版）"""
+def get_feature_calculators() -> List[Tuple[str, Callable]]:
+    """
+    Get list of feature calculation functions
+    
+    Returns:
+        List of (feature_name, calculation_function) tuples
+    """
     return [
-        # 基础统计量
-        ('std', lambda d: np.std(d['r'])),
-        ('median', lambda d: np.median(d['r'])),
-        ('mean', lambda d: np.mean(d['r'])),
-        ('max', lambda d: np.max(d['r'])),
-        ('min', lambda d: np.min(d['r'])),
+        ('std', lambda arr: 0.0 if np.all(np.isnan(arr)) else np.nanstd(arr)),
+        ('median', lambda arr: 0.0 if np.all(np.isnan(arr)) else np.nanmedian(arr)),
+        ('mean', lambda arr: 0.0 if np.all(np.isnan(arr)) else np.nanmean(arr)),
+        ('max', lambda arr: 0.0 if np.all(np.isnan(arr)) else np.nanmax(arr)),
+        ('min', lambda arr: 0.0 if np.all(np.isnan(arr)) else np.nanmin(arr)),
     ]
 
-def body_features(input_path: str, window_size_sec: float, step_size_sec: float, label_path: str) -> Tuple[np.ndarray, List[str], List[Dict]]:
-    """从输入文件中提取运动特征（优化版，自动丢弃不足窗口）"""
-    # 加载数据
+def body_features(input_path: str, window_size_sec: float, step_size_sec: float, label_path: str) -> Tuple[np.ndarray, List[str]]:
+    """
+    Extract body motion features (based on motion amplitude) from input file
+    
+    Args:
+        input_path: Path to input JSON file
+        window_size_sec: Window size in seconds
+        step_size_sec: Step size in seconds
+        label_path: Path to label file (for determining valid time range)
+    
+    Returns:
+        features_array: Extracted feature array (one row per window)
+        feature_names: Corresponding feature names list
+    """
     data = utils.load_and_validate_json(input_path)
     features = data['features']
     fps = data['video_info']['fps']
     
-    # 获取有效时间范围并裁剪数据
     min_start_time, max_end_time = utils.get_valid_time_range(label_path)
     features = utils.crop_data_by_time(features, fps, min_start_time, max_end_time)
     
-    # 计算窗口参数并生成有效窗口索引
     window_size, step_size = utils.calculate_window_params(fps, window_size_sec, step_size_sec)
-    valid_indices = np.arange(0, len(features) - window_size + 1, step_size)
+    window_start_indices = np.arange(0, len(features) - window_size + 1, step_size)
     
-    # 获取特征计算器
-    feature_calculators = get_feature_calculators(fps)
-    feature_keys = ['Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg'] # 局部肢体
-    # feature_keys = ['WholeBody'] # 人体整体
-    # feature_keys = ['WholeFrameMotion'] # 完整画面
-
+    body_parts = ['Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg']
+    # body_parts = ['WholeBody']
+    # body_parts = ['WholeFrameMotion']
+    
+    feature_calculators = get_feature_calculators()
+    
     feature_names = [
-        f"{key}_{name}" for key in feature_keys 
-        for name, _ in feature_calculators
+        f"{part}_{stat_name}" 
+        for part in body_parts 
+        for stat_name, _ in feature_calculators
     ]
     
-    # 预分配数组（使用有效窗口数量）
-    features_array = np.zeros((len(valid_indices), len(feature_names)))
-    window_metadata = []
+    num_windows = len(window_start_indices)
+    num_features = len(feature_names)
+    features_array = np.zeros((num_windows, num_features))
     
-    # 向量化处理每个有效窗口
-    for i, start_idx in enumerate(valid_indices):
+    for i, start_idx in enumerate(window_start_indices):
         end_idx = start_idx + window_size
-        
-        # 记录元数据（自动计算绝对时间）
-        window_metadata.append(utils.create_window_metadata(
-            min_start_time * fps + start_idx,
-            min_start_time * fps + end_idx,
-            fps
-        ))
-        
-        # 计算特征（向量化版本）
         window_data = features[start_idx:end_idx]
-        feature_values = []
-        for key in feature_keys:
-            motion = extract_motion_components(window_data, key)
-            feature_values.extend(
-                calculator(motion) 
-                for _, calculator in feature_calculators
-            )
         
-        features_array[i] = feature_values
+        window_features = []
+        for part in body_parts:
+            amplitude_values = extract_amplitude_values(window_data, part)
+            for _, calculator in feature_calculators:
+                window_features.append(calculator(amplitude_values))
+        
+        features_array[i] = window_features
     
-    return features_array, feature_names, window_metadata
-
-def extract_raw_motion_features(dataDir):
-    file = utils.get_motion_feature_file_path(dataDir)
-    labelDir = utils.get_label_file_path(dataDir)
-    
-    data = utils.load_and_validate_json(file)
-    features = data['features']  
-    fps = data['video_info']['fps']
-    
-    min_start_time, max_end_time = utils.get_valid_time_range(labelDir)
-    features = utils.crop_data_by_time(features, fps, min_start_time, max_end_time)
-    
-    window_size, step_size = utils.calculate_window_params(fps, config.slidingWindows, config.step)
-    valid_indices = np.arange(0, len(features) - window_size + 1, step_size)
-    
-    feature_names = ['Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg']
-    feature_List = []
-    for i, start_idx in enumerate(valid_indices):
-        end_idx = start_idx + window_size
-
-        window_data = features[start_idx:end_idx]
-        feature_values = []
-        for name in feature_names:
-            motion = extract_motion_components(window_data, name)['r']       
-            feature_values.append(motion) 
-
-        feature_List.append(np.array(feature_values))
-    motion_features = np.array(feature_List)
-
-    return motion_features, feature_names
+    return features_array, feature_names
