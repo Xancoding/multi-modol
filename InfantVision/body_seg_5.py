@@ -1,72 +1,37 @@
 import os
 import warnings
 import logging
-import shutil
-
-
-# === 1. 彻底关闭所有 Python 警告 ===
-warnings.filterwarnings("ignore")  # 全局忽略所有警告
-
-# === 2. 禁用所有 logging 输出 ===
-logging.disable(logging.CRITICAL)  # 关闭所有 logging（包括 INFO/WARNING）
-
-# === 4. 设置 TensorFlow 环境变量（必须在 import 之前）===
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # 3=ERROR, 2=WARNING, 1=INFO, 0=DEBUG
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # 禁用 oneDNN 的浮点顺序警告
-
+import glob
+import json
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-
+from tqdm import tqdm
 from modelscope.outputs import OutputKeys
 from modelscope.pipelines import pipeline
 from modelscope.utils.constant import Tasks
-import glob
-from tqdm import tqdm
-import json
+from reproducibility_utils import set_seed
 
+MIN_SCORE_THRESHOLD = 0.7  
+MIN_PIXEL_AREA = 3000
 
-def delete_files_in_directory(directory):    
-    # 遍历目录中的所有文件
-    for filename in os.listdir(directory):
-        file_path = os.path.join(directory, filename)
-        try:
-            # 删除文件
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-                print(f"Deleted file: {file_path}")
-        except Exception as e:
-            print(f"Error deleting file {file_path}: {e}")
+# === Configuration for Reproducibility ===
+warnings.filterwarnings("ignore") 
+logging.disable(logging.CRITICAL) 
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3" 
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
-
-def delete_folder(folder_path):
-    try:
-        if os.path.exists(folder_path):
-            shutil.rmtree(folder_path)
-            print(f"成功删除文件夹: {folder_path}")
-            return True
-        else:
-            print(f"文件夹不存在: {folder_path}")
-            return False
-    except Exception as e:
-        print(f"删除文件夹时出错: {folder_path} - 错误: {e}")
-        return False
-    
 
 def simple_white_balance_with_gain_limit(image, limit=10.0):
-    # 计算每个通道的平均值
+    """Simple white balance based on Gray World assumption, with gain limit."""
     avg_b, avg_g, avg_r = np.mean(image, axis=(0, 1))
-
-    # 计算最大平均值
     max_avg = max(avg_b, avg_g, avg_r)
 
-    # 计算调整比例
-    blue_ratio = min(max_avg / avg_b, limit)
-    green_ratio = min(max_avg / avg_g, limit)
-    red_ratio = min(max_avg / avg_r, limit)
+    blue_ratio = min(max_avg / avg_b, limit) if avg_b > 0 else limit
+    green_ratio = min(max_avg / avg_g, limit) if avg_g > 0 else limit
+    red_ratio = min(max_avg / avg_r, limit) if avg_r > 0 else limit
 
-    # 应用白平衡
-    wb_image = image.copy()
+    wb_image = image.copy().astype(np.float32)
     wb_image[:, :, 0] = np.clip(wb_image[:, :, 0] * blue_ratio, 0, 255)
     wb_image[:, :, 1] = np.clip(wb_image[:, :, 1] * green_ratio, 0, 255)
     wb_image[:, :, 2] = np.clip(wb_image[:, :, 2] * red_ratio, 0, 255)
@@ -75,20 +40,22 @@ def simple_white_balance_with_gain_limit(image, limit=10.0):
 
 
 def save_img(balanced_frame, visual_mask, output_dir, video_name_without_ext):
+    """Save the first frame's segmentation results (image, masked image, mask only)."""
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    # 显示原始图像
-    axs[0].imshow(balanced_frame)
-    axs[0].set_title('Image')
+    frame_rgb = cv2.cvtColor(balanced_frame, cv2.COLOR_BGR2RGB)
+    mask_rgb = visual_mask[:, :, :3]
+
+    axs[0].imshow(frame_rgb)
+    axs[0].set_title('Image (White Balanced)')
     axs[0].axis('off')
 
-    # 显示带掩码的图像
-    axs[1].imshow(balanced_frame)
-    axs[1].imshow(visual_mask, alpha=0.5)  # 透明度设置为0.5
-    axs[1].set_title('Image with Mask')
+    axs[1].imshow(frame_rgb)
+    axs[1].imshow(mask_rgb, alpha=0.5) 
+    axs[1].set_title('Image with Mask (Alpha=0.5)')
     axs[1].axis('off')
 
-    axs[2].imshow(visual_mask, cmap='gray')
-    axs[2].set_title('Mask Only')
+    axs[2].imshow(mask_rgb) 
+    axs[2].set_title('Color Mask Only')
     axs[2].axis('off')
 
     plt.tight_layout()
@@ -97,280 +64,219 @@ def save_img(balanced_frame, visual_mask, output_dir, video_name_without_ext):
 
 
 def generate_visual_mask(frame, part_masks_dict, body_part_colors):
-    """
-    生成可视化掩码图像
-    参数:
-        frame: 原始帧图像
-        part_masks_dict: 各部位的分割掩码字典 {部位名: [mask1, mask2...]}
-        body_part_colors: 各部位颜色配置 {部位名: (R,G,B,A)}
-    返回:
-        visual_mask: 可视化掩码 (RGBA格式)
-        blended_frame: 原始帧与掩码的混合结果
-    """
+    """Generate the visual mask (RGBA) and the blended frame (BGR)."""
     height, width = frame.shape[:2]
+    visual_mask = np.zeros((height, width, 4), dtype=np.float32) # RGBA (0-1 float32)
     
-    # 创建RGBA格式的可视化掩码
-    visual_mask = np.zeros((height, width, 4), dtype=np.float32)
-    visual_mask[..., 3] = 1.0  # Alpha通道
-    
-    # 为每个部位填充颜色
     for part_name, masks in part_masks_dict.items():
-        color = body_part_colors[part_name]
+        r, g, b, a = body_part_colors[part_name]
+        color_float = (r / 255.0, g / 255.0, b / 255.0, a)
+
         for mask in masks:
-            visual_mask[mask > 0] = color
+            visual_mask[mask > 0] = color_float
     
-    # 混合原始帧和掩码 (50%透明度)
-    blended_frame = cv2.addWeighted(
-        frame, 0.5, 
-        visual_mask[:, :, :3].astype(np.uint8), 
-        0.5, 0
-    )
+    # Convert RGBA (0-1) to BGR (0-255) for OpenCV blending
+    mask_bgr_255 = (visual_mask[:, :, [2, 1, 0]] * 255).astype(np.uint8)
+    
+    # Blend original frame and mask (50% transparency)
+    blended_frame = cv2.addWeighted(frame, 0.5, mask_bgr_255, 0.5, 0)
     
     return visual_mask, blended_frame
 
 
 def Generate_Intime_Mask_AVI(input_video_path, segmentation_pipeline, body_part_colors):
-    # 创建输出目录
+    """
+    Main function to process video: WB, Segmentation, Optical Flow, Feature Extraction.
+    Saves a masked video (AVI) and motion features (JSON).
+    """
+    # Setup output paths
     output_dir = os.path.join(os.path.dirname(os.path.dirname(input_video_path)), 'Body')
     os.makedirs(output_dir, exist_ok=True)
-
-    # 设置输出文件路径
     video_name_without_ext = os.path.splitext(os.path.basename(input_video_path))[0]
     output_json_path = os.path.join(output_dir, f"{video_name_without_ext}_motion_features.json")
     output_video_path = os.path.join(output_dir, f"{video_name_without_ext}_masked.avi")
-    # 检查输出文件是否已存在
-    if (os.path.exists(output_video_path) and 
-            os.path.exists(output_json_path)):
-            existing_pngs = [f for f in os.listdir(output_dir) 
-                            if f.startswith(f"{video_name_without_ext}_seg_result") and f.endswith('.png')]
-            if existing_pngs:
-                print(f"\n输出文件已存在，跳过处理: {os.path.basename(output_video_path)}")
-                return
+    
+    # Skip if output files already exist
+    if (os.path.exists(output_video_path) and os.path.exists(output_json_path) and
+        any(f.startswith(f"{video_name_without_ext}_seg_result") and f.endswith('.png') for f in os.listdir(output_dir))):
+        print(f"\nOutput files exist, skipping: {os.path.basename(output_video_path)}")
+        return
             
-    # 读取视频文件
+    # Video capture and info extraction
     video_capture = cv2.VideoCapture(input_video_path)
     print(f"Processing video: {input_video_path}")
     
-    # 获取视频信息
     fps = video_capture.get(cv2.CAP_PROP_FPS)
     width = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # 准备JSON输出数据结构
+    # Initialize JSON output structure
     motion_analysis_results = {
-        "video_info": {
-            "path": input_video_path,
-            "fps": float(fps),
-            "frame_count": total_frames,
-            "resolution": [float(width), float(height)],
-        },
+        "video_info": {"path": input_video_path, "fps": float(fps), "frame_count": total_frames, "resolution": [float(width), float(height)]},
         "features": []
     }
     
-    # 创建高质量视频写入对象
+    # Video writer setup (MJPG codec for AVI)
     video_codec = cv2.VideoWriter_fourcc(*'MJPG')
-    video_writer = cv2.VideoWriter(output_video_path, video_codec, fps, (width, height))    
+    video_writer = cv2.VideoWriter(output_video_path, video_codec, fps, (width, height))     
 
-    # 进度条初始化
-    # total_frames = 120
     progress_bar = tqdm(total=total_frames, desc="Processing Video", unit='frame')
     
     current_frame_index = 0
     previous_gray_frame = None
-    visual_mask = np.zeros((height, width, 4), dtype=np.float32)
+    
     while True:
-    # while current_frame_index <= total_frames:
         ret, current_frame = video_capture.read()
         if not ret:
             break
         
-        # 白平衡处理
-        frame_copy = current_frame.copy()
-        balanced_frame = simple_white_balance_with_gain_limit(frame_copy)
+        # 1. White Balance
+        balanced_frame = simple_white_balance_with_gain_limit(current_frame.copy())
         
-        # 处理分割掩码
+        # 2. Segmentation (Human Parsing)
         part_masks_dict = {part_name: [] for part_name in body_part_colors.keys()}
-        part_scores_dict = {part_name: [] for part_name in body_part_colors.keys()}        
+        part_scores_dict = {part_name: [] for part_name in body_part_colors.keys()}     
         segmentation_result = segmentation_pipeline(balanced_frame)
+        
         for label, mask, score in zip(segmentation_result[OutputKeys.LABELS], segmentation_result['masks'], segmentation_result["scores"]):
             if label in body_part_colors.keys():
-                part_masks_dict[label].append(mask)
-                part_scores_dict[label].append(score)
+                mask_area = np.sum(mask > 0)
+                if score >= MIN_SCORE_THRESHOLD and mask_area >= MIN_PIXEL_AREA: 
+                    part_masks_dict[label].append(mask)
+                    part_scores_dict[label].append(score)
 
-        # 生成可视化结果
-        visual_mask, blended_frame = generate_visual_mask(
-            balanced_frame, 
-            part_masks_dict, 
-            body_part_colors
-        )
+        # 3. Generate visualization & Save first frame
+        visual_mask, blended_frame = generate_visual_mask(balanced_frame, part_masks_dict, body_part_colors)
         
-        # 存储第一帧的分割结果
         if current_frame_index == 0:
             save_img(balanced_frame, visual_mask, output_dir, video_name_without_ext)
 
-        # 计算光流
+        # 4. Optical Flow (Farneback)
         gray_frame = cv2.cvtColor(balanced_frame, cv2.COLOR_BGR2GRAY)
         optical_flow = None
         if previous_gray_frame is not None:
             optical_flow = cv2.calcOpticalFlowFarneback(previous_gray_frame, gray_frame, None, 0.5, 3, 15, 3, 5, 1.2, 0)
         previous_gray_frame = gray_frame
 
+        # 5. Face Bounding Box and size
+        head_width = head_height = 0.0
         if "Face" in part_masks_dict and len(part_masks_dict["Face"]) > 0:
-            face_mask = part_masks_dict["Face"][0]  # 取第一个面部mask
-            
-            # 找到非零像素的行列坐标
-            rows = np.any(face_mask, axis=1)  # 高度方向
-            cols = np.any(face_mask, axis=0)  # 宽度方向
+            face_mask = part_masks_dict["Face"][0]
+            rows = np.any(face_mask, axis=1)
+            cols = np.any(face_mask, axis=0)
             
             if np.any(rows) and np.any(cols):
-                # 计算边界坐标
-                y_min, y_max = np.where(rows)[0][[0, -1]]  # 高度边界
-                x_min, x_max = np.where(cols)[0][[0, -1]]  # 宽度边界
+                y_min, y_max = np.where(rows)[0][[0, -1]]
+                x_min, x_max = np.where(cols)[0][[0, -1]]
+                cv2.rectangle(blended_frame, (x_min, y_min), (x_max, y_max), (0, 0, 255), 2)
+                head_height = float(y_max - y_min)
+                head_width = float(x_max - x_min)
+        
+        video_writer.write(blended_frame)
 
-                cv2.rectangle(blended_frame, (x_min, y_min), (x_max, y_max), (0, 0, 255))
-                # 写入标记视频
-                video_writer.write(blended_frame)
-
-                head_height = y_max - y_min  # 实际高度（像素）
-                head_width = x_max - x_min   # 实际宽度（像素）
-            else:
-                head_width = head_height = 0  # 无效mask
-        else:
-            head_width = head_height = 0  # 未检测到面部
-
-        # 准备当前帧的特征数据
+        # 6. Initialize frame features
         frame_motion_features = {
-            "Frame": current_frame_index,
-            "head": [float(head_width), float(head_height)],
-            "Face": [],
-            "Left-arm": [],
-            "Right-arm": [],
-            "Left-leg": [],
-            "Right-leg": [],
-            "Torso-skin": [],
-            "WholeBody": [],
-            "WholeFrameMotion": [],
+            "Frame": current_frame_index, "head": [head_width, head_height],
+            "Face": [], "Left-arm": [], "Right-arm": [], "Left-leg": [], 
+            "Right-leg": [], "Torso-skin": [], "WholeBody": [], "WholeFrameMotion": [],
         }
         
-        # 计算各部位的运动强度
+        # 7. Calculate motion features for each part
         if optical_flow is not None:
             for part_name, masks in part_masks_dict.items():
                 for mask_idx, mask in enumerate(masks):
-                    # 计算该部位mask区域的光流强度
-                    if mask.sum() > 0:  # 确保mask有效
+                    if mask.sum() > 0:
                         mask_indices = mask > 0
-                        # 计算平均位移
                         shift_x, shift_y = np.mean(optical_flow[mask_indices], axis=0)
-                        # 计算位移幅度shift_r
                         shift_r = np.sqrt(shift_x ** 2 + shift_y ** 2)
-                        # 计算位移角度（转换为角度制）
                         shift_a = np.degrees(np.arctan2(shift_y, shift_x))
-                        # 获取对应的分割分数
                         current_score = part_scores_dict[part_name][mask_idx]
-                        # 存储完整运动特征向量
-                        motion_vector = [
-                            float(shift_x), 
-                            float(shift_y), 
-                            float(shift_r), 
-                            float(shift_a),
-                            float(current_score)
-                        ]
+                        
+                        motion_vector = [float(shift_x), float(shift_y), float(shift_r), float(shift_a), float(current_score)]
                         frame_motion_features[part_name].append(motion_vector)
 
-        # ===== WholeBody =====
-        if optical_flow is not None:
-            # 合并指定部位的mask
+            # 8. WholeBody motion (combined human parts)
             combined_mask = np.zeros_like(gray_frame, dtype=bool)
-            for part_name in ['Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg', 'Torso-skin']:
+            target_parts = ['Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg', 'Torso-skin']
+            combined_scores = []
+            
+            for part_name in target_parts:
                 if part_name in part_masks_dict:
                     for mask in part_masks_dict[part_name]:
                         combined_mask = combined_mask | (mask > 0)
-            
+                    if part_name in part_scores_dict:
+                        combined_scores.extend(part_scores_dict[part_name])
+
             if combined_mask.any():
-                # 计算运动特征
                 shift_x, shift_y = np.mean(optical_flow[combined_mask], axis=0)
                 shift_r = np.sqrt(shift_x**2 + shift_y**2)
                 shift_a = np.degrees(np.arctan2(shift_y, shift_x))
-                
-                # 计算合并部位的平均分数
-                combined_scores = []
-                for part_name in ['Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg', 'Torso-skin']:
-                    if part_name in part_scores_dict:
-                        combined_scores.extend(part_scores_dict[part_name])
                 avg_score = np.mean(combined_scores) if combined_scores else 0.0
                 
                 frame_motion_features["WholeBody"].append([
-                    float(shift_x), 
-                    float(shift_y), 
-                    float(shift_r), 
-                    float(shift_a),
-                    float(avg_score)
+                    float(shift_x), float(shift_y), float(shift_r), float(shift_a), float(avg_score)
                 ])
-        # ===== 新增部分结束 =====
+                
+            # 9. WholeFrameMotion (Global motion)
+            shift_x_global, shift_y_global = np.mean(optical_flow, axis=(0,1))
+            shift_r_global = np.sqrt(shift_x_global**2 + shift_y_global**2)
+            shift_a_global = np.degrees(np.arctan2(shift_y_global, shift_x_global))
+            
+            frame_motion_features["WholeFrameMotion"].append([
+                float(shift_x_global), float(shift_y_global), float(shift_r_global), float(shift_a_global)
+            ])
 
-        # 计算全局运动特征
-        if optical_flow is not None:
-            shift_x, shift_y = np.mean(optical_flow, axis=(0,1))
-            shift_r = np.sqrt(shift_x**2 + shift_y**2)
-            shift_a = np.degrees(np.arctan2(shift_y, shift_x))
-            frame_motion_features["WholeFrameMotion"] = [[
-                float(shift_x), float(shift_y), 
-                float(shift_r), float(shift_a)
-            ]]
-
-        motion_analysis_results["features"].append(frame_motion_features)        
+        # 10. Append frame features
+        motion_analysis_results["features"].append(frame_motion_features)     
 
         current_frame_index += 1
-        progress_bar.update(1)  # 更新进度条
+        progress_bar.update(1)
 
-    # 保存JSON文件
-    with open(output_json_path, 'w') as f:
-        json.dump(motion_analysis_results, f, indent=2)
-
-    # 释放资源
+    # 11. Release resources and save JSON
     video_capture.release()
     video_writer.release()
     progress_bar.close()
+    
+    with open(output_json_path, 'w') as f:
+        json.dump(motion_analysis_results, f, indent=2)
     
     print(f"\nProcessing completed. Results saved in: {output_dir}")
 
 
 def main(): 
-    prefix = "/data/Leo/mm/data/raw_data/"
-    # video_files = glob.glob(prefix + "*/*/*/*.avi")
-    # files = [
-    #     # "NanfangHospital/cry/drz-m",
-    #     # "ShenzhenUniversityGeneralHospital/non-cry/zlj-baby-f",
-    #     "NanfangHospital/cry/llj-baby-f",
-    #     # "NanfangHospital/non-cry/lyz-m",
-    # ]
-    # dirs = [prefix + file + "/*0.avi" for file in files]
-    # video_files = [glob.glob(d) for d in dirs]
-    # video_files = [item for sublist in video_files for item in sublist]
-
-    # # dataset Newborn200
-    # prefix = '/data/Leo/mm/data/Newborn200/data/'
-    # # video_files = [prefix + x + '.mp4' for x in ['01', '02', '03', '04', '05']]
+    set_seed(42)
+    # === Video File Path Configuration (Modify as needed) ===
+    # # NEWBORN200
+    # prefix = "/data/Leo/mm/data/NEWBORN200/data/"
     # video_files = glob.glob(prefix + "*.mp4")
-
-    # dataset NICU
-    # prefix = "/data/Leo/mm/data/NanfangHospital/data/"
-    prefix = "/data/Leo/mm/data/ShenzhenUniversityGeneralHospital/data/"
+    # NICU50
+    prefix = "/data/Leo/mm/data/NICU50/data/"
     video_files = glob.glob(prefix + "*.avi")
+    
+    # === ModelScope Segmentation Pipeline Initialization ===
+    segmentation_pipeline = pipeline(
+        Tasks.image_segmentation, 
+        'iic/cv_resnet101_image-multiple-human-parsing', 
+        device='cuda'
+    )
+    
+    # Body parts and their corresponding colors (R, G, B, A), 0-255 range, A=1
+    BODY_PART_COLORS = {
+        'Left-arm': (255, 0, 0, 1),      
+        'Right-arm': (255, 0, 0, 1),     
+        'Left-leg': (0, 0, 255, 1),      
+        'Right-leg': (0, 0, 255, 1),     
+        'Face': (255, 255, 255, 1),      
+        'Torso-skin': (0, 255, 0, 1),    
+    }
 
+    # === Process all video files ===
     for video_file in video_files:
         Generate_Intime_Mask_AVI(
             input_video_path=video_file,
-            segmentation_pipeline=pipeline(Tasks.image_segmentation, 'iic/cv_resnet101_image-multiple-human-parsing', device='cuda'),
-            body_part_colors={
-                'Left-arm': (255, 0, 0, 1),      # Red for left arm
-                'Right-arm': (255, 0, 0, 1),     # Red for right arm
-                'Left-leg': (0, 0, 255, 1),      # Blue for left leg
-                'Right-leg': (0, 0, 255, 1),     # Blue for right leg
-                'Face': (255, 255, 255, 1),      # White for face
-                'Torso-skin': (0, 255, 0, 1),    # Green for torso
-            },
+            segmentation_pipeline=segmentation_pipeline,
+            body_part_colors=BODY_PART_COLORS,
         )
 
 if __name__ == "__main__":
