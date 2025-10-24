@@ -54,7 +54,7 @@ def extract_subject_id(filepath: str) -> str:
 def generate_feature_filename(label_path: str) -> str:
     """Generate feature filename based on label file path."""
     basename = os.path.splitext(os.path.basename(label_path))[0]
-    return f"{basename}_features.npz"
+    return f"{basename}.npz"
 
 def load_and_validate_json(input_path: str) -> Dict:
     """Load JSON file and validate its existence."""
@@ -99,32 +99,10 @@ def calculate_window_params(
 
 def filter_outliers(
     values: np.ndarray,
-    iqr_coef: float = 2.5,
-    threshold: float = 0.3
+    # 2.5, 0.3
+    iqr_coef: float = 1.5,  # Multiplier for IQR (smaller = stricter)
+    threshold: float = 0.2, # Max allowed ratio of outliers (0.0-1.0)
 ) -> np.ndarray:
-    """
-    Filters outliers using the IQR method and replaces them with NaN.
-    
-    Parameters:
-    -----------
-    values : np.ndarray
-        Input data array (e.g., MAR values or motion amplitudes).
-    iqr_coef : float, default=2.5
-        Multiplier for IQR to set outlier boundaries:
-        - Higher values → Fewer values marked as outliers (more lenient)
-        - Lower values → More values marked as outliers (more sensitive)
-        Typical range: 1.5 (strict) to 3.0 (lenient).
-    threshold : float, default=0.3
-        Maximum allowed ratio of outliers to total data points (0.0-1.0):
-        - If outlier ratio < threshold → Replace outliers with NaN
-        - If outlier ratio ≥ threshold → Keep all data unchanged
-        Lower values → More conservative filtering.
-
-    Returns:
-    --------
-    np.ndarray
-        Data with outliers replaced by NaN (if conditions met).
-    """
     if values.size < 10 or np.sum(~np.isnan(values)) < 10:
         return values
     

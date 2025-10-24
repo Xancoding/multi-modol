@@ -60,65 +60,109 @@ def load_or_extract_features(audio_files):
     subject_features = {}
     
     # Process each audio file with progress bar
-    for file_path in tqdm(audio_files, desc="Processing audio files"):
-        # Generate feature file path
-        feature_file_path = os.path.join(features_dir, utils.generate_feature_filename(file_path))
+    for file_path in tqdm(audio_files, desc="Processing files"):
+        # 1. Define multi-file paths and initialize data structure
+        base_filename = utils.generate_feature_filename(file_path).replace('.npz', '')
         
-        # Try to load existing features
-        if os.path.exists(feature_file_path):
-            try:
-                # Load saved feature data
-                loaded_data = np.load(feature_file_path, allow_pickle=True)
-                subject_id = utils.extract_subject_id(file_path)
-                
-                # Store loaded features in subject dictionary
-                subject_features.setdefault(subject_id, []).append({
-                    'acoustic': loaded_data['acoustic'],
-                    'motion': loaded_data['motion'],
-                    'face': loaded_data['face'],
-                    'acoustic_feature_names': loaded_data['acoustic_feature_names'].tolist(),
-                    'motion_feature_names': loaded_data['motion_feature_names'].tolist(),
-                    'face_feature_names': loaded_data['face_feature_names'].tolist(),
-                    'label': loaded_data['label'],  
-                    'scene': loaded_data['scene']             
-                })
-                continue
-            except Exception as error:
-                print(f"Failed to load features, regenerating: {error}")
+        metadata_file_path = os.path.join(features_dir, f"{base_filename}_metadata.npz")
+        acoustic_file_path = os.path.join(features_dir, f"{base_filename}_acoustic.npz")
+        motion_file_path = os.path.join(features_dir, f"{base_filename}_motion.npz")
+        face_file_path = os.path.join(features_dir, f"{base_filename}_face.npz")
 
-        # Extract new features
-        acoustic_features, acoustic_feature_names, label, scene = extract_audio_features(file_path)
-        motion_features, motion_feature_names = extract_body_motion_features(file_path)
-        facial_features, facial_feature_names = extract_facial_features(file_path)       
-
-        # Save extracted features
-        np.savez(
-            feature_file_path,
-            acoustic=acoustic_features,
-            motion=motion_features,
-            face=facial_features,
-            acoustic_feature_names=acoustic_feature_names,
-            motion_feature_names=motion_feature_names,
-            face_feature_names=facial_feature_names,
-            label=label,
-            scene=scene
-        )
-
-        # Store extracted features in subject dictionary
         subject_id = utils.extract_subject_id(file_path)
-        subject_features.setdefault(subject_id, []).append({
-            'acoustic': acoustic_features,
-            'motion': motion_features,
-            'face': facial_features,
-            'acoustic_feature_names': acoustic_feature_names,
-            'motion_feature_names': motion_feature_names,
-            'face_feature_names': facial_feature_names,
-            'label': label,
-            'scene': scene
-        })
+        
+        loaded_data = {}
+        
+        # --- 2. Core Load/Extract/Save Logic: Metadata -> Acoustic -> Motion -> Face ---
+
+        # --- A. Metadata (Label/Scene): Must be loaded or extracted first ---
+        if os.path.exists(metadata_file_path):
+            try:
+                data = np.load(metadata_file_path, allow_pickle=True)
+                loaded_data.update({'label': data['label'], 'scene': data['scene']})
+            except Exception as error:
+                print(f"Metadata load error, regenerating: {error}")
+                loaded_data = {} # Force full regeneration if metadata fails
+
+        if 'label' not in loaded_data:
+            # Extract acoustic to get segment definitions (label/scene)
+            acoustic_features, acoustic_feature_names, label, scene = extract_audio_features(file_path)
+            
+            # Save Metadata
+            np.savez(metadata_file_path, label=label, scene=scene)
+            loaded_data.update({'label': label, 'scene': scene})
+            
+            # Save Acoustic features (extracted simultaneously with metadata)
+            np.savez(acoustic_file_path, acoustic=acoustic_features, acoustic_feature_names=acoustic_feature_names)
+            loaded_data.update({'acoustic': acoustic_features, 'acoustic_feature_names': acoustic_feature_names})
+        
+        # Skip if metadata extraction failed
+        if 'label' not in loaded_data:
+            print(f"Fatal error: Could not obtain metadata for {file_path}. Skipping.")
+            continue
+
+
+        # --- B. Acoustic Features (Only regenerate if file is missing/corrupted) ---
+        if 'acoustic' not in loaded_data:
+            if os.path.exists(acoustic_file_path):
+                try:
+                    data = np.load(acoustic_file_path, allow_pickle=True)
+                    loaded_data.update({'acoustic': data['acoustic'], 'acoustic_feature_names': data['acoustic_feature_names'].tolist()})
+                except Exception as error:
+                    print(f"Acoustic load error, regenerating: {error}")
+
+        if 'acoustic' not in loaded_data:
+            # Extract only features (label/scene already handled)
+            acoustic_features, acoustic_feature_names, _, _ = extract_audio_features(file_path)
+            
+            np.savez(acoustic_file_path, acoustic=acoustic_features, acoustic_feature_names=acoustic_feature_names)
+            loaded_data.update({'acoustic': acoustic_features, 'acoustic_feature_names': acoustic_feature_names})
+
+
+        # --- C. Body Motion Features ---
+        if 'motion' not in loaded_data:
+            if os.path.exists(motion_file_path):
+                try:
+                    data = np.load(motion_file_path, allow_pickle=True)
+                    loaded_data.update({'motion': data['motion'], 'motion_feature_names': data['motion_feature_names'].tolist()})
+                except Exception as error:
+                    print(f"Motion load error, regenerating: {error}")
+
+        if 'motion' not in loaded_data:
+            motion_features, motion_feature_names = extract_body_motion_features(file_path)
+            
+            np.savez(motion_file_path, motion=motion_features, motion_feature_names=motion_feature_names)
+            loaded_data.update({'motion': motion_features, 'motion_feature_names': motion_feature_names})
+
+
+        # --- D. Facial Features ---
+        if 'face' not in loaded_data:
+            if os.path.exists(face_file_path):
+                try:
+                    data = np.load(face_file_path, allow_pickle=True)
+                    loaded_data.update({'face': data['face'], 'face_feature_names': data['face_feature_names'].tolist()})
+                except Exception as error:
+                    print(f"Face load error, regenerating: {error}")
+
+        if 'face' not in loaded_data:
+            facial_features, facial_feature_names = extract_facial_features(file_path)
+            
+            np.savez(face_file_path, face=facial_features, face_feature_names=facial_feature_names)
+            loaded_data.update({'face': facial_features, 'face_feature_names': facial_feature_names})
+
+        # 3. Store the final result or skip if incomplete
+        required_keys = ['acoustic', 'motion', 'face', 'label', 'scene']
+        if all(key in loaded_data for key in required_keys): 
+            subject_features.setdefault(subject_id, []).append(loaded_data)
+        else:
+            print(f"Warning: Incomplete data for {file_path}. Skipping. Keys found: {loaded_data.keys()}")
     
     if _face_stats['total'] > 0:
-        print(f"Face Acc: {1 - _face_stats['errors']/_face_stats['total']:.1%}")
+        t = _face_stats['total']
+        print(f"Face Frames | Total: {t}, Acc: {1 - _face_stats['errors'] / t:.2%}")
+        print(f"  - MAR Acc: {1 - _face_stats['mar_errors'] / t:.2%}")
+        print(f"  - L-EAR Acc: {1 - _face_stats['left_ear_errors'] / t:.2%}")
+        print(f"  - R-EAR Acc: {1 - _face_stats['right_ear_errors'] / t:.2%}")
 
     return subject_features
 
@@ -244,19 +288,11 @@ def load_data(enable_scene_printing=False):
         excluded_wav_files = []        
         # excluded_wav_files = [prefix + x + '.wav' for x in EXCLUDED_NEWBORN200_FILES]
     elif 'NICU50' in config.dataDir:
-        excluded_wav_files = [prefix + x + '.wav' for x in EXCLUDED_NICU50_FILES]
+        excluded_wav_files = []        
+        # excluded_wav_files = [prefix + x + '.wav' for x in EXCLUDED_NICU50_FILES]
     else:
         excluded_wav_files = []
     wav_files = [f for f in ori_wav_files if f not in excluded_wav_files]
-
-    # wav_files = [
-    #     prefix + x + '.wav' for x in
-    #     [
-    #         'lxm-baby-m_2025-07-29-14-19-07',
-    #         # 'zm-baby-m_2025-07-23-19-24-10',
-    #         'lxm-baby-m_2025-07-29-14-55-30',
-    #     ]
-    # ]
 
     subject_data = load_or_extract_features(wav_files)
     print(f"Total subjects: {len(subject_data)}")
