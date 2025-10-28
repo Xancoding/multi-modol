@@ -157,7 +157,6 @@ def get_facial_feature_calculators() -> List[Tuple[str, Callable]]:
     calculators = []
     for feature_name, data_key in FEATURES.items():
         for stat_name, stat_func in STATS.items():
-            # Return -1 for all-NaN arrays, otherwise apply statistic
             wrapper_func = lambda arr: np.nan if np.all(np.isnan(arr)) else stat_func(arr)
             name = f"{feature_name}_{stat_name}"
             calculator = create_feature_calculator(wrapper_func, data_key)

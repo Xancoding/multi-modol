@@ -13,7 +13,8 @@ from lightgbm import LGBMClassifier
 from imblearn.over_sampling import RandomOverSampler
 from sklearn.ensemble import StackingClassifier
 from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer  # 用于指定特征列范围
+from sklearn.compose import ColumnTransformer  
+from sklearn.impute import SimpleImputer
 
 # Local imports
 import config
@@ -105,14 +106,23 @@ class ModelEvaluator:
         
         # Extract subject IDs from group names
         groups = np.array([str(g).split('_')[0] for g in groups])
-        
-        for train_idx, test_idx in tqdm(self.cross_validator.split(X, y, groups), 
+
+        global_imputer = SimpleImputer(strategy='median', add_indicator=True)
+        global_imputer.fit(X)
+        X_imputed = global_imputer.transform(X)
+
+        if global_imputer.indicator_.features_ is not None:
+            indicator_indices = global_imputer.indicator_.features_
+        else:
+            indicator_indices = np.array([])
+
+        for train_idx, test_idx in tqdm(self.cross_validator.split(X_imputed, y, groups), 
                                     total=config.n_splits, 
                                     desc=f"{method_name} ({model_architecture})"):
             fold_model = self.create_model(model_architecture)
-            trained_model, scaler = self._train_model(X[train_idx], y[train_idx], fold_model)
+            trained_model, scaler = self._train_model(X_imputed[train_idx], y[train_idx], fold_model)
 
-            y_pred = trained_model.predict(scaler.transform(X[test_idx]))  
+            y_pred = trained_model.predict(scaler.transform(X_imputed[test_idx]))  
             # Overall evaluation
             fold_metrics = self._evaluate_model(y[test_idx], y_pred)
             for k in metrics: 
@@ -143,9 +153,9 @@ class ModelEvaluator:
         # Return feature importance if applicable
         if model_architecture.lower() in ['rf', 'lgbm']:
             avg_importance = np.mean(importance, axis=0)
-            return avg_importance
+            return avg_importance, indicator_indices
 
-        return avg_metrics
+        return None, None
 
 
     def evaluate_multimodal_fusion(self, feature_data, target_labels, method_name, subject_ids,
@@ -210,16 +220,19 @@ class ModelEvaluator:
             base_models = [
                 ('acoustic', Pipeline([
                     ('select_features', ColumnTransformer([('select', 'passthrough', acoustic_columns)])),
+                    ('imputer', SimpleImputer(strategy='median', add_indicator=True)), # <-- 新增 Imputer
                     ('scaler', StandardScaler()),
                     ('classifier', self.create_model(acoustic_model))
                 ])),
                 ('motion', Pipeline([
                     ('select_features', ColumnTransformer([('select', 'passthrough', motion_columns)])),
+                    ('imputer', SimpleImputer(strategy='median', add_indicator=True)),
                     ('scaler', StandardScaler()),
                     ('classifier', self.create_model(motion_model))
                 ])),
                 ('face', Pipeline([
                     ('select_features', ColumnTransformer([('select', 'passthrough', face_columns)])),
+                    ('imputer', SimpleImputer(strategy='median', add_indicator=True)),
                     ('scaler', StandardScaler()),
                     ('classifier', self.create_model(face_model))
                 ]))
@@ -253,4 +266,4 @@ class ModelEvaluator:
         # Calculate average metrics across all cross-validation folds
         avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
         self._print_metrics(avg_metrics)
-        return avg_metrics
+        return None, None

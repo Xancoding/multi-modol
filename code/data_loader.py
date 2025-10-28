@@ -305,9 +305,9 @@ def load_data(enable_scene_printing=False):
     # face_feature_names = face_feature_names[5:]
     # face_features[:] = [row[5:] for row in face_features]   
 
-    # # only MAR
-    # face_feature_names = face_feature_names[:5]
-    # face_features[:] = [row[:5] for row in face_features]
+    # only MAR
+    face_feature_names = face_feature_names[:5]
+    face_features[:] = [row[:5] for row in face_features]
 
     return (
         subject_ids,

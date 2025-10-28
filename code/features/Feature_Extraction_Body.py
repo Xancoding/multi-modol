@@ -37,11 +37,11 @@ def get_feature_calculators() -> List[Tuple[str, Callable]]:
         List of (feature_name, calculation_function) tuples
     """
     return [
-        ('std', lambda arr: 0.0 if np.all(np.isnan(arr)) else np.nanstd(arr)),
-        ('median', lambda arr: 0.0 if np.all(np.isnan(arr)) else np.nanmedian(arr)),
-        ('mean', lambda arr: 0.0 if np.all(np.isnan(arr)) else np.nanmean(arr)),
-        ('max', lambda arr: 0.0 if np.all(np.isnan(arr)) else np.nanmax(arr)),
-        ('min', lambda arr: 0.0 if np.all(np.isnan(arr)) else np.nanmin(arr)),
+        ('std', lambda arr: np.nan if np.all(np.isnan(arr)) else np.nanstd(arr)),
+        ('median', lambda arr: np.nan if np.all(np.isnan(arr)) else np.nanmedian(arr)),
+        ('mean', lambda arr: np.nan if np.all(np.isnan(arr)) else np.nanmean(arr)),
+        ('max', lambda arr: np.nan if np.all(np.isnan(arr)) else np.nanmax(arr)),
+        ('min', lambda arr: np.nan if np.all(np.isnan(arr)) else np.nanmin(arr)),
     ]
 
 def body_features(input_path: str, window_size_sec: float, step_size_sec: float, label_path: str) -> Tuple[np.ndarray, List[str]]:

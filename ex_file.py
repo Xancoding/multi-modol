@@ -38,25 +38,32 @@ if __name__ == "__main__":
 'mxt-baby-f_2025-07-29-13-09-45',
 'whq-baby-m_2025-07-29-11-48-29',
 'lj-baby-m_2025-07-29-12-06-14',
-'hmx-baby-f_2025-08-14-16-54-55',         
+'hmx-baby-f_2025-08-14-16-54-55',   
+'zm-baby-m_2025-07-23-19-24-10',
+'wxl-baby-m_2025-08-05-12-19-40',
+'xgx-baby-m_2025-07-29-15-39-53',
+'hym-baby-f_2025-07-29-15-26-27',
+'lxt-f_2025-07-29-17-14-18',
+'ysqd-f_2025-07-29-15-32-40',
+'cfy-baby-m_2025-08-05-14-05-54',     
     ]
 
 
     # dir = ['Body', 'Face', 'data']
-    # dir = 'data'
-    # avi_files = [infant + '.avi' for infant in infants]
-    # wav_files = [infant + '.wav' for infant in infants]
-    # files = avi_files + wav_files    
+    dir = 'data'
+    avi_files = [infant + '.avi' for infant in infants]
+    wav_files = [infant + '.wav' for infant in infants]
+    files = avi_files + wav_files    
 
     # dir = 'Face'
     # json_files = [infant + '_face_landmarks.json' for infant in infants]
     # avi_files = [infant + '_face_landmarks.avi' for infant in infants]
     # files = json_files + avi_files
 
-    dir = 'Body'
-    json_files = [infant + '_motion_features.json' for infant in infants]
-    avi_files = [infant + '_masked.avi' for infant in infants]
-    files = json_files + avi_files
+    # dir = 'Body'
+    # json_files = [infant + '_motion_features.json' for infant in infants]
+    # avi_files = [infant + '_masked.avi' for infant in infants]
+    # files = json_files + avi_files
 
     source = os.path.join("/data/Leo/mm/data/NICU50", dir)
     target = os.path.join("/data/Leo/mm/data/badNICU50", dir)

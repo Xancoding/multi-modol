@@ -70,7 +70,7 @@ def execute_evaluations(model_evaluator, feature_sets, target_labels, participan
 
 def main():
     """Main function to orchestrate the experiment workflow."""
-    enable_feature_printing = False
+    enable_feature_printing = True
     enable_scene_printing = False
     utils.initialize_random_seed(config.seed)
     
@@ -83,12 +83,12 @@ def main():
     tasks = [
         # 'audio', 
         # 'motion', 
-        'face', 
-        # 'early_fusion', 
+        # 'face', 
+        'early_fusion', 
         # 'late_fusion',
         ]
     # Execute evaluations (modify evaluation methods in execute_evaluations as needed)
-    multimodal_importance_scores = execute_evaluations(
+    multimodal_importance_scores, indicator_indices = execute_evaluations(
         model_evaluator, 
         feature_sets[:3],  # audio, motion, facial features
         labels,
@@ -101,9 +101,19 @@ def main():
     
     print("\n=== Evaluation Completed ===")
     
-    if config.model_type in ['lgbm', 'rf'] and enable_feature_printing:
+    if config.model_type in ['lgbm', 'rf'] and enable_feature_printing and multimodal_importance_scores is not None:
+        all_original_feature_names = sum(feature_names, [])
+        final_feature_names = all_original_feature_names[:]        
+
+        if indicator_indices.size > 0:
+            actual_indicator_names = [
+                f"{all_original_feature_names[i]}_indicator" 
+                for i in indicator_indices
+            ]
+            final_feature_names = all_original_feature_names + actual_indicator_names
+
         display_top_features(
-            sum(feature_names, []),  # Flatten all feature names
+            final_feature_names,
             multimodal_importance_scores, 
             "Multimodal", 
             num_features=20
