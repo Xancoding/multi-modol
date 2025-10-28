@@ -55,7 +55,7 @@ def execute_evaluations(model_evaluator, feature_sets, target_labels, participan
         )
     if 'early_fusion' in tasks:
         # 5. Feature-level fusion evaluation
-        multimodal_importance_scores = model_evaluator.evaluate_feature_combination(
+        multimodal_importance_scores, indicator_indices  = model_evaluator.evaluate_feature_combination(
             combined_feature_set, 
             target_labels, 
             scenes,
@@ -64,9 +64,9 @@ def execute_evaluations(model_evaluator, feature_sets, target_labels, participan
             model_type,
             enable_scene_printing
         )
-        return multimodal_importance_scores
+        return multimodal_importance_scores, indicator_indices
 
-    return None
+    return None, None
 
 def main():
     """Main function to orchestrate the experiment workflow."""
