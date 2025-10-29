@@ -107,22 +107,47 @@ class ModelEvaluator:
         # Extract subject IDs from group names
         groups = np.array([str(g).split('_')[0] for g in groups])
 
-        global_imputer = SimpleImputer(strategy='median', add_indicator=True)
-        global_imputer.fit(X)
-        X_imputed = global_imputer.transform(X)
+        # Pre-scan full data to determine fixed indicator columns (ensure dimension consistency, no leakage)
+        has_missing = np.isnan(X).any(axis=0)  # Which features have any NaN
+        indicator_features = np.where(has_missing)[0]  # Original feature indices with missing (for naming)
+        n_features = X.shape[1]
+        n_indicators = np.sum(has_missing)  # Fixed number
+        print(f"Features with missing: {n_indicators}/{n_features}")
+        use_imputer = n_indicators > 0
 
-        if global_imputer.indicator_.features_ is not None:
-            indicator_indices = global_imputer.indicator_.features_
-        else:
-            indicator_indices = np.array([])
-
-        for train_idx, test_idx in tqdm(self.cross_validator.split(X_imputed, y, groups), 
+        for train_idx, test_idx in tqdm(self.cross_validator.split(X, y, groups), 
                                     total=config.n_splits, 
                                     desc=f"{method_name} ({model_architecture})"):
-            fold_model = self.create_model(model_architecture)
-            trained_model, scaler = self._train_model(X_imputed[train_idx], y[train_idx], fold_model)
+            # Per-fold imputer, fit only on train
+            X_train_fold = X[train_idx]
+            X_test_fold = X[test_idx]
+            y_train_fold = y[train_idx]
 
-            y_pred = trained_model.predict(scaler.transform(X_imputed[test_idx]))  
+            if use_imputer:
+                fold_imputer = SimpleImputer(strategy='median', add_indicator=True)
+                X_train_imputed = fold_imputer.fit_transform(X_train_fold)  # Fit only on train
+                X_test_imputed = fold_imputer.transform(X_test_fold)      # Transform test
+
+                # Force dimension consistency (pad zeros to fixed n_indicators)
+                orig_n_train = X_train_imputed.shape[1] - X_train_fold.shape[1]
+                if orig_n_train < n_indicators:
+                    pad = np.zeros((X_train_imputed.shape[0], n_indicators - orig_n_train))
+                    X_train_imputed = np.hstack([X_train_imputed, pad])
+                X_train_imputed = X_train_imputed[:, :n_features + n_indicators]  # Trim if > (rare)
+
+                orig_n_test = X_test_imputed.shape[1] - X_test_fold.shape[1]
+                if orig_n_test < n_indicators:
+                    pad = np.zeros((X_test_imputed.shape[0], n_indicators - orig_n_test))
+                    X_test_imputed = np.hstack([X_test_imputed, pad])
+                X_test_imputed = X_test_imputed[:, :n_features + n_indicators]
+            else:
+                X_train_imputed = X_train_fold
+                X_test_imputed = X_test_fold
+
+            fold_model = self.create_model(model_architecture)
+            trained_model, scaler = self._train_model(X_train_imputed, y_train_fold, fold_model)
+
+            y_pred = trained_model.predict(scaler.transform(X_test_imputed))  
             # Overall evaluation
             fold_metrics = self._evaluate_model(y[test_idx], y_pred)
             for k in metrics: 
@@ -139,6 +164,9 @@ class ModelEvaluator:
             if model_architecture.lower() in ['rf', 'lgbm']:
                 fold_importance = trained_model.feature_importances_
                 fold_importance = np.maximum(fold_importance, 0)
+                # Optional: mask indicator importance (last n_indicators columns)
+                if use_imputer:
+                    fold_importance[-n_indicators:] = 0
                 importance.append(fold_importance / np.sum(fold_importance))  # Normalize
         
         avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
@@ -148,11 +176,12 @@ class ModelEvaluator:
         if scene_acc_dict and enable_scene_printing:
             print("\n=== Scene Accuracy ===")
             for scene in sorted(scene_acc_dict):
-                print(f"Scene {scene}: {np.mean(scene_acc_dict[scene]):.4f}")
+                print(f"Scene {scene}: {np.mean(scene_acc_dict[scene])*100:.2f}")
         
         # Return feature importance if applicable
         if model_architecture.lower() in ['rf', 'lgbm']:
             avg_importance = np.mean(importance, axis=0)
+            indicator_indices = indicator_features if use_imputer else np.array([])  # Now: original indices for indicators
             return avg_importance, indicator_indices
 
         return None, None
@@ -220,7 +249,7 @@ class ModelEvaluator:
             base_models = [
                 ('acoustic', Pipeline([
                     ('select_features', ColumnTransformer([('select', 'passthrough', acoustic_columns)])),
-                    ('imputer', SimpleImputer(strategy='median', add_indicator=True)), # <-- 新增 Imputer
+                    ('imputer', SimpleImputer(strategy='median', add_indicator=True)),
                     ('scaler', StandardScaler()),
                     ('classifier', self.create_model(acoustic_model))
                 ])),

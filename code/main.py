@@ -70,7 +70,7 @@ def execute_evaluations(model_evaluator, feature_sets, target_labels, participan
 
 def main():
     """Main function to orchestrate the experiment workflow."""
-    enable_feature_printing = True
+    enable_feature_printing = False
     enable_scene_printing = False
     utils.initialize_random_seed(config.seed)
     
@@ -81,16 +81,16 @@ def main():
     model_evaluator = evaluator.ModelEvaluator()
 
     tasks = [
-        # 'audio', 
-        # 'motion', 
-        # 'face', 
+        'audio', 
+        'motion', 
+        'face', 
         'early_fusion', 
-        # 'late_fusion',
+        'late_fusion',
         ]
     # Execute evaluations (modify evaluation methods in execute_evaluations as needed)
     multimodal_importance_scores, indicator_indices = execute_evaluations(
         model_evaluator, 
-        feature_sets[:3],  # audio, motion, facial features
+        feature_sets,
         labels,
         participant_ids,
         config.model_type,
